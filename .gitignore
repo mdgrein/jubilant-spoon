@@ -205,3 +205,14 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+vision.txt
+CLAUDE.md
+*.log
+
+# Clowder-specific
+workspace/          # Agent output directory
+clowder.db         # SQLite database
+clowder.db-shm     # SQLite shared memory
+clowder.db-wal     # SQLite write-ahead log

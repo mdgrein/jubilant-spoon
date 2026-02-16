@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip show:*)",
+      "Bash(git mv:*)",
+      "Bash(python -c \"import os; os.remove\\(''D:\\\\development\\\\jubilant-spoon\\\\agents\\\\orchestrator.py''\\); os.remove\\(''D:\\\\development\\\\jubilant-spoon\\\\agents\\\\ORCHESTRATOR_DESIGN.md''\\); print\\(''Files deleted''\\)\")",
+      "Bash(python -c \"import os; os.remove\\(r''D:\\\\development\\\\jubilant-spoon\\\\agents\\\\orchestrator.py''\\); os.remove\\(r''D:\\\\development\\\\jubilant-spoon\\\\agents\\\\ORCHESTRATOR_DESIGN.md''\\); print\\(''Files deleted''\\)\")",
+      "Bash(.venvScriptspytest tests/test_server.py -v)",
+      "Bash(\".venv/Scripts/pytest\" tests/test_server.py -v)"
+    ]
+  }
+}

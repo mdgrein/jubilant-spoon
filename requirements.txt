@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+requests
+PyYAML
+textual
+rich
+pytest
+pytest-asyncio
+httpx

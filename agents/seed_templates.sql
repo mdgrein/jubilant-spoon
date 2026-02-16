@@ -1,0 +1,244 @@
+-- Seed Pipeline Templates
+-- These are pre-defined workflows users can select and customize
+
+-- =====================================================================
+-- TEMPLATE: Full Workflow (Plan → Dev → Test → Verify)
+-- =====================================================================
+INSERT INTO pipeline_templates VALUES (
+    'template-full',
+    'Full Workflow',
+    'Complete AI development workflow with planning, implementation, testing, and verification',
+    '2026-02-11T00:00:00Z',
+    '2026-02-11T00:00:00Z'
+);
+
+-- Stages
+INSERT INTO template_stages VALUES ('ts-full-1', 'template-full', 'plan', 1);
+INSERT INTO template_stages VALUES ('ts-full-2', 'template-full', 'dev', 2);
+INSERT INTO template_stages VALUES ('ts-full-3', 'template-full', 'test', 3);
+INSERT INTO template_stages VALUES ('ts-full-4', 'template-full', 'verify', 4);
+
+-- Jobs
+INSERT INTO template_jobs VALUES (
+    'tj-full-plan',
+    'ts-full-1',
+    'planner',
+    'Break down task',
+    '{{original_prompt}}',  -- Will be replaced with user prompt
+    NULL,
+    50, 300
+);
+
+INSERT INTO template_jobs VALUES (
+    'tj-full-dev',
+    'ts-full-2',
+    'dev',
+    'Implement changes',
+    'Implement the following: {{original_prompt}}',
+    NULL,
+    50, 300
+);
+
+INSERT INTO template_jobs VALUES (
+    'tj-full-test',
+    'ts-full-3',
+    'tester',
+    'Plan and verify tests',
+    'Design comprehensive tests for: {{original_prompt}}',
+    NULL,
+    50, 300
+);
+
+INSERT INTO template_jobs VALUES (
+    'tj-full-verify',
+    'ts-full-4',
+    'verifier',
+    'Verify implementation',
+    'Verify that the implementation satisfies: {{original_prompt}}',
+    NULL,
+    50, 300
+);
+
+-- Dependencies
+INSERT INTO template_job_dependencies VALUES ('tj-full-dev', 'tj-full-plan', 'success');
+INSERT INTO template_job_dependencies VALUES ('tj-full-test', 'tj-full-dev', 'success');
+INSERT INTO template_job_dependencies VALUES ('tj-full-verify', 'tj-full-test', 'success');
+
+-- =====================================================================
+-- TEMPLATE: Dev + Test (No planning or verification)
+-- =====================================================================
+INSERT INTO pipeline_templates VALUES (
+    'template-dev-test',
+    'Dev + Test',
+    'Quick workflow for implementation and testing without planning',
+    '2026-02-11T00:00:00Z',
+    '2026-02-11T00:00:00Z'
+);
+
+-- Stages
+INSERT INTO template_stages VALUES ('ts-dt-1', 'template-dev-test', 'dev', 1);
+INSERT INTO template_stages VALUES ('ts-dt-2', 'template-dev-test', 'test', 2);
+
+-- Jobs
+INSERT INTO template_jobs VALUES (
+    'tj-dt-dev',
+    'ts-dt-1',
+    'dev',
+    'Implement changes',
+    '{{original_prompt}}',
+    NULL,
+    50, 300
+);
+
+INSERT INTO template_jobs VALUES (
+    'tj-dt-test',
+    'ts-dt-2',
+    'tester',
+    'Test implementation',
+    'Test the implementation of: {{original_prompt}}',
+    NULL,
+    50, 300
+);
+
+-- Dependencies
+INSERT INTO template_job_dependencies VALUES ('tj-dt-test', 'tj-dt-dev', 'success');
+
+-- =====================================================================
+-- TEMPLATE: Dev Only (Quick implementation, no testing)
+-- =====================================================================
+INSERT INTO pipeline_templates VALUES (
+    'template-dev-only',
+    'Dev Only',
+    'Single development job for quick prototyping',
+    '2026-02-11T00:00:00Z',
+    '2026-02-11T00:00:00Z'
+);
+
+-- Stages
+INSERT INTO template_stages VALUES ('ts-do-1', 'template-dev-only', 'dev', 1);
+
+-- Jobs
+INSERT INTO template_jobs VALUES (
+    'tj-do-dev',
+    'ts-do-1',
+    'dev',
+    'Implement changes',
+    '{{original_prompt}}',
+    NULL,
+    50, 300
+);
+
+-- =====================================================================
+-- TEMPLATE: Test Existing Code (No development)
+-- =====================================================================
+INSERT INTO pipeline_templates VALUES (
+    'template-test-only',
+    'Test Existing Code',
+    'Test and verify existing implementation',
+    '2026-02-11T00:00:00Z',
+    '2026-02-11T00:00:00Z'
+);
+
+-- Stages
+INSERT INTO template_stages VALUES ('ts-to-1', 'template-test-only', 'test', 1);
+INSERT INTO template_stages VALUES ('ts-to-2', 'template-test-only', 'verify', 2);
+
+-- Jobs
+INSERT INTO template_jobs VALUES (
+    'tj-to-test',
+    'ts-to-1',
+    'tester',
+    'Test code',
+    'Test the existing implementation: {{original_prompt}}',
+    NULL,
+    50, 300
+);
+
+INSERT INTO template_jobs VALUES (
+    'tj-to-verify',
+    'ts-to-2',
+    'verifier',
+    'Verify code',
+    'Verify the existing implementation: {{original_prompt}}',
+    NULL,
+    50, 300
+);
+
+-- Dependencies
+INSERT INTO template_job_dependencies VALUES ('tj-to-verify', 'tj-to-test', 'success');
+
+-- =====================================================================
+-- TEMPLATE: Plan Only (Just break down the task)
+-- =====================================================================
+INSERT INTO pipeline_templates VALUES (
+    'template-plan-only',
+    'Plan Only',
+    'Just plan the work without executing',
+    '2026-02-11T00:00:00Z',
+    '2026-02-11T00:00:00Z'
+);
+
+-- Stages
+INSERT INTO template_stages VALUES ('ts-po-1', 'template-plan-only', 'plan', 1);
+
+-- Jobs
+INSERT INTO template_jobs VALUES (
+    'tj-po-plan',
+    'ts-po-1',
+    'planner',
+    'Break down task',
+    '{{original_prompt}}',
+    NULL,  -- No custom command
+    50, 300
+);
+
+-- =====================================================================
+-- TEMPLATE: Mock Agent (Fast testing with simulated agents)
+-- =====================================================================
+INSERT INTO pipeline_templates VALUES (
+    'template-mock',
+    'Mock Agent',
+    'Test pipeline structure with fast mock agents (no LLM calls)',
+    '2026-02-11T00:00:00Z',
+    '2026-02-11T00:00:00Z'
+);
+
+-- Stages
+INSERT INTO template_stages VALUES ('ts-mock-1', 'template-mock', 'plan', 1);
+INSERT INTO template_stages VALUES ('ts-mock-2', 'template-mock', 'dev', 2);
+INSERT INTO template_stages VALUES ('ts-mock-3', 'template-mock', 'test', 3);
+
+-- Jobs with configurable mock agent using inline Python (lambda-style)
+INSERT INTO template_jobs VALUES (
+    'tj-mock-plan',
+    'ts-mock-1',
+    'mock',
+    'Mock Planner',
+    '{{original_prompt}}',
+    'python agents/mock_agent.py --agent-type planner --failure-rate 0.05 --duration 1.5 --prompt "{{prompt}}" --python "tasks = [f''Task {i+1}: Step {i+1}'' for i in range(random.randint(3, 7))]; print(''\\n''.join(tasks))"',
+    50, 300
+);
+
+INSERT INTO template_jobs VALUES (
+    'tj-mock-dev',
+    'ts-mock-2',
+    'mock',
+    'Mock Developer',
+    '{{original_prompt}}',
+    'python agents/mock_agent.py --agent-type dev --failure-rate 0.15 --duration 3.0 --prompt "{{prompt}}" --python "files = [''app.py'', ''utils.py'', ''test_app.py'']; changes = {f: random.randint(10, 100) for f in files}; print(''\\n''.join([f''{f}: +{c} lines'' for f, c in changes.items()]))"',
+    50, 300
+);
+
+INSERT INTO template_jobs VALUES (
+    'tj-mock-test',
+    'ts-mock-3',
+    'mock',
+    'Mock Tester',
+    '{{original_prompt}}',
+    'python agents/mock_agent.py --agent-type tester --failure-rate 0.20 --duration 2.0 --prompt "{{prompt}}" --python "total = random.randint(50, 200); passed = int(total * random.uniform(0.8, 1.0)); coverage = random.randint(75, 95); print(f''Tests: {passed}/{total} passed''); print(f''Coverage: {coverage}%'')"',
+    50, 300
+);
+
+-- Dependencies
+INSERT INTO template_job_dependencies VALUES ('tj-mock-dev', 'tj-mock-plan', 'success');
+INSERT INTO template_job_dependencies VALUES ('tj-mock-test', 'tj-mock-dev', 'success');
