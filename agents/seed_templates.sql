@@ -185,4 +185,40 @@ INSERT OR IGNORE INTO template_job_dependencies (template_job_id, depends_on_tem
     ('tj-mock-dev',  'tj-mock-plan', 'success'),
     ('tj-mock-test', 'tj-mock-dev',  'success');
   
-PRAGMA foreign_keys = ON; 
+-- =====================================================================
+-- TEMPLATE: Modify Existing Code (Explore → Modify → Verify)
+-- =====================================================================
+INSERT OR IGNORE INTO pipeline_templates (template_id, name, description, created_at, updated_at) VALUES (
+    'template-modify-existing',
+    'Modify Existing Code',
+    'Read and understand an existing codebase, then make targeted modifications',
+    '2026-03-03T00:00:00Z',
+    '2026-03-03T00:00:00Z'
+);
+
+INSERT OR IGNORE INTO template_stages (template_stage_id, template_id, name, stage_order) VALUES
+    ('ts-me-1', 'template-modify-existing', 'modify', 1),
+    ('ts-me-2', 'template-modify-existing', 'verify', 2);
+
+INSERT OR IGNORE INTO template_jobs
+    (template_job_id, template_stage_id, agent_type, name, prompt_template, max_iterations, timeout_seconds)
+VALUES
+    ('tj-me-modify', 'ts-me-1', 'dev', 'Modify existing code',
+     'You are working on an existing codebase located in your workspace.
+First, explore the directory structure and read the relevant files.
+Understand the existing patterns and conventions before making any changes.
+Make targeted modifications rather than rewriting from scratch.
+Do not run git commands or commit changes.
+Task: {{original_prompt}}',
+     50, 600),
+    ('tj-me-verify', 'ts-me-2', 'verifier', 'Verify modifications',
+     'You are verifying changes made to an existing codebase in your workspace.
+Read the relevant files and confirm the following task was completed correctly.
+Do not run git commands.
+Task: {{original_prompt}}',
+     20, 300);
+
+INSERT OR IGNORE INTO template_job_dependencies (template_job_id, depends_on_template_job_id, dependency_type) VALUES
+    ('tj-me-verify', 'tj-me-modify', 'success');
+
+PRAGMA foreign_keys = ON;

@@ -1,15 +1,31 @@
+# DORMANT POC — TUI client, not actively maintained. Web UI takes priority.
 import asyncio
 import json
+import os
 import requests
 from datetime import datetime
+from pathlib import Path
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Tree, Static, Button, Label
+from textual.widgets import Header, Footer, Tree, Static, Button, Input, Label, Select
 from textual.containers import Container, Horizontal
 
 from client.api_client import ClowderAPIClient
 
 SERVER_URL = "http://localhost:8000"
 REQUEST_TIMEOUT = 3
+WORKSPACE_BASE = "workspace"
+
+
+def _list_workspace_dirs() -> list[tuple[str, str]]:
+    """Return (name, absolute_path) for each immediate subdirectory of WORKSPACE_BASE."""
+    base = Path(WORKSPACE_BASE)
+    if not base.is_dir():
+        return []
+    return sorted(
+        (e.name, str(base.resolve() / e.name))
+        for e in base.iterdir()
+        if e.is_dir() and not e.name.startswith(".") and e.name != "__pycache__"
+    )
 
 STATUS_ICONS = {
     "pending": "[ ]",
@@ -86,6 +102,17 @@ class ClowderClientApp(App):
         width: 4fr;
         padding: 1 2;
         overflow-y: auto;
+    }
+    #workspace_row {
+        height: auto;
+        margin-top: 0;
+    }
+    #workspace_row Input {
+        width: 2fr;
+    }
+    #workspace_row Select {
+        width: 1fr;
+        min-width: 22;
     }
     """
 
@@ -487,6 +514,16 @@ class ClowderClientApp(App):
             # Template not in cache (shouldn't happen)
             panel.mount(Static(f"Template: {name}\n\n(Template details not available)"))
 
+        panel.mount(Label("Prompt:"))
+        panel.mount(Input(placeholder="Describe what you want the agent to do...", id="pipeline_prompt"))
+        panel.mount(Label("Workspace:"))
+        workspace_dirs = _list_workspace_dirs()
+        default_workspace = str(Path(WORKSPACE_BASE).resolve())
+        panel.mount(Horizontal(
+            Input(value=default_workspace, id="workspace_path"),
+            Select(workspace_dirs, prompt="Browse subfolders...", allow_blank=True, id="workspace_dir_select"),
+            id="workspace_row",
+        ))
         panel.mount(Button("Start Pipeline", id="start_pipeline"))
         self._selected_template = name
 
@@ -531,6 +568,14 @@ class ClowderClientApp(App):
     # Button actions
     # ------------------------------------------------------------------
 
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """When a workspace subfolder is chosen, copy its path into the text input."""
+        if event.select.id == "workspace_dir_select" and event.value is not Select.BLANK:
+            try:
+                self.query_one("#workspace_path", Input).value = str(event.value)
+            except Exception:
+                pass
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "start_pipeline":
             await self._do_start_pipeline()
@@ -546,12 +591,23 @@ class ClowderClientApp(App):
         self.notify(f"Starting pipeline '{name}'...")
 
         try:
-            # TODO: Add UI to collect prompt from user
+            prompt_input = self.query_one("#pipeline_prompt", Input)
+            prompt = prompt_input.value.strip() or "No prompt specified."
+        except Exception:
+            prompt = "No prompt specified."
+
+        try:
+            workspace_input = self.query_one("#workspace_path", Input)
+            workspace = workspace_input.value.strip() or str(Path(WORKSPACE_BASE).resolve())
+        except Exception:
+            workspace = str(Path(WORKSPACE_BASE).resolve())
+
+        try:
             pipeline = await asyncio.to_thread(
                 self.api_client.start_pipeline,
                 name,
-                "Test pipeline execution",
-                "D:/workspace"
+                prompt,
+                workspace,
             )
             self.notify(f"Started pipeline '{pipeline['name']}'")
         except requests.exceptions.HTTPError as e:

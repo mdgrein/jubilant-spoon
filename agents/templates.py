@@ -227,6 +227,109 @@ class TemplateManager:
 
         return pipeline_id
 
+    def instantiate_from_spec(
+        self,
+        spec: dict,
+        original_prompt: str,
+        workspace_path: str,
+    ) -> str:
+        """
+        Create a pipeline from an inline spec dict (no stored template required).
+
+        Args:
+            spec: Dict with 'stages' (list) and 'dependencies' (list).
+                  Each stage has 'name', 'stage_order', and 'jobs'.
+                  Each job has 'ref', 'agent_type', 'prompt_template', etc.
+                  Each dependency has 'from_ref', 'to_ref', 'type'.
+            original_prompt: User's prompt (replaces {{original_prompt}})
+            workspace_path: Allowed workspace path
+
+        Returns:
+            Pipeline ID
+        """
+        pipeline_id = str(uuid.uuid4())
+        self.db.conn.execute("""
+            INSERT INTO pipelines (
+                pipeline_id, template_id, original_prompt, status, created_at, updated_at
+            ) VALUES (?, NULL, ?, 'pending', ?, ?)
+        """, (
+            pipeline_id,
+            original_prompt,
+            self._timestamp(),
+            self._timestamp(),
+        ))
+
+        ref_to_job_id: dict[str, str] = {}
+
+        for stage in spec.get("stages", []):
+            stage_id = str(uuid.uuid4())
+            self.db.conn.execute("""
+                INSERT INTO stages (
+                    stage_id, pipeline_id, name, stage_order, status, created_at
+                ) VALUES (?, ?, ?, ?, 'pending', ?)
+            """, (
+                stage_id,
+                pipeline_id,
+                stage["name"],
+                stage["stage_order"],
+                self._timestamp(),
+            ))
+
+            for job in stage.get("jobs", []):
+                job_id = str(uuid.uuid4())
+                ref = job.get("ref")
+                if ref:
+                    ref_to_job_id[ref] = job_id
+
+                prompt_template = job.get("prompt_template") or ""
+                prompt = prompt_template.replace("{{original_prompt}}", original_prompt)
+
+                command = None
+                if job.get("command_template"):
+                    command = job["command_template"].replace("{{job_id}}", job_id)
+                    command = command.replace("{{prompt}}", prompt)
+                    command = command.replace("{{agent_type}}", job.get("agent_type", ""))
+
+                self.db.conn.execute("""
+                    INSERT INTO jobs (
+                        job_id, pipeline_id, stage_id, agent_type, prompt, original_prompt, command,
+                        max_iterations, timeout_seconds, allowed_paths,
+                        artifact_strategy, retry_strategy, template_job_id, status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'pending', ?, ?)
+                """, (
+                    job_id,
+                    pipeline_id,
+                    stage_id,
+                    job.get("agent_type", "dev"),
+                    prompt,
+                    prompt,
+                    command,
+                    job.get("max_iterations", 50),
+                    job.get("timeout_seconds", 300),
+                    f'["{workspace_path}"]',
+                    job.get("artifact_strategy"),
+                    job.get("retry_strategy"),
+                    self._timestamp(),
+                    self._timestamp(),
+                ))
+
+        for dep in spec.get("dependencies", []):
+            from_job_id = ref_to_job_id.get(dep["from_ref"])
+            to_job_id = ref_to_job_id.get(dep["to_ref"])
+            if from_job_id and to_job_id:
+                self.db.conn.execute("""
+                    INSERT INTO job_dependencies (
+                        job_id, depends_on_job_id, dependency_type
+                    ) VALUES (?, ?, ?)
+                """, (
+                    from_job_id,
+                    to_job_id,
+                    dep.get("type", "success"),
+                ))
+
+        self.db.conn.commit()
+        return pipeline_id
+
     def _timestamp(self) -> str:
         """Get ISO8601 timestamp."""
         return datetime.now(timezone.utc).isoformat()

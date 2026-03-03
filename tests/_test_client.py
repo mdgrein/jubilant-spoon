@@ -637,9 +637,10 @@ async def test_start_pipeline_keyboard_flow(mock_api_client):
         assert tree.cursor_node.data["type"] == "template"
         assert tree.cursor_node.data["name"] == "build-and-test"
 
-        # Tab to focus the Start button
-        await pilot.press("tab")
-        await pilot.pause()
+        # Tab through: prompt input → workspace input → workspace select → start button
+        for _ in range(4):
+            await pilot.press("tab")
+            await pilot.pause()
         btn = app.query_one("#start_pipeline", Button)
         assert btn.has_focus
 
