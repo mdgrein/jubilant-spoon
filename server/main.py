@@ -1,4 +1,7 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse, PlainTextResponse
 from pydantic import BaseModel
 import asyncio
 import sys
@@ -34,12 +37,76 @@ class FlushingFileHandler(logging.FileHandler):
 # Configure logger (actual config happens in main() with uvicorn)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Initialize database and load seed data on startup."""
+    logger.info("Initializing database...")
+
+    # Check if database is already initialized
+    tables_exist = db.conn.execute("""
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='pipeline_templates'
+    """).fetchone()
+
+    # Load schemas only if database is new
+    if not tables_exist:
+        logger.info("Database is new, creating schema...")
+        schema_path = Path(__file__).parent.parent / "agents" / "schema_pipelines.sql"
+        if schema_path.exists():
+            try:
+                schema = schema_path.read_text()
+                db.conn.executescript(schema)
+                db.conn.commit()
+                logger.info("Database schema created")
+            except Exception as e:
+                logger.error(f"Error creating schema: {e}")
+                raise
+    else:
+        logger.info("Database schema already exists")
+
+    # Additive migrations: add columns that may be missing from older DBs.
+    # SQLite raises OperationalError if a column already exists; we swallow it.
+    _migrations = [
+        "ALTER TABLE template_jobs ADD COLUMN model TEXT",
+        "ALTER TABLE template_jobs ADD COLUMN vendor TEXT DEFAULT 'local-ollama'",
+        "ALTER TABLE jobs ADD COLUMN model TEXT",
+        "ALTER TABLE jobs ADD COLUMN vendor TEXT NOT NULL DEFAULT 'local-ollama'",
+    ]
+    for sql in _migrations:
+        try:
+            db.conn.execute(sql)
+            db.conn.commit()
+        except Exception:
+            pass  # column already exists
+
+    # Load/refresh seed templates on every startup.
+    # The seed file uses INSERT OR IGNORE, so existing rows are skipped safely.
+    # New templates added to the file appear automatically after a restart.
+    seed_path = Path(__file__).parent.parent / "agents" / "seed_templates.sql"
+    if seed_path.exists():
+        try:
+            db.conn.executescript(seed_path.read_text())
+            db.conn.commit()
+            logger.info("Seed templates refreshed")
+        except Exception as e:
+            logger.error(f"Error loading seeds: {e}")
+
+    # Start orchestration background task
+    asyncio.create_task(orchestration_loop())
+    logger.info("Orchestration loop started")
+
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 # Initialize database
 db = ClowderDB("clowder.db")
 template_manager = TemplateManager(db)
 pipeline_service = PipelineService(db, template_manager)
+
+_static_dir = Path(__file__).parent.parent / "static"
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 # Middleware to log requests with timing at TRACE level
 @app.middleware("http")
@@ -382,51 +449,6 @@ def check_pipeline_completion(pipeline_id: str):
 # Pydantic models removed - using database records instead
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database and load seed data."""
-    logger.info("Initializing database...")
-
-    # Check if database is already initialized
-    tables_exist = db.conn.execute("""
-        SELECT name FROM sqlite_master
-        WHERE type='table' AND name='pipeline_templates'
-    """).fetchone()
-
-    # Load schemas only if database is new
-    if not tables_exist:
-        logger.info("Database is new, creating schema...")
-        schema_path = Path(__file__).parent.parent / "agents" / "schema_pipelines.sql"
-        if schema_path.exists():
-            try:
-                schema = schema_path.read_text()
-                db.conn.executescript(schema)
-                db.conn.commit()
-                logger.info("Database schema created")
-            except Exception as e:
-                logger.error(f"Error creating schema: {e}")
-                raise
-    else:
-        logger.info("Database schema already exists")
-
-    # Load seed templates if database is empty
-    templates = template_manager.list_templates()
-    if not templates:
-        logger.info("No templates found, loading seeds...")
-        seed_path = Path(__file__).parent.parent / "agents" / "seed_templates.sql"
-        if seed_path.exists():
-            try:
-                seeds = seed_path.read_text()
-                db.conn.executescript(seeds)
-                db.conn.commit()
-                logger.info("Seed templates loaded")
-            except Exception as e:
-                logger.error(f"Error loading seeds: {e}")
-
-    # Start orchestration background task
-    asyncio.create_task(orchestration_loop())
-    logger.info("Orchestration loop started")
-
 @app.get("/pipelines/templates")
 async def list_pipeline_templates():
     """List available pipeline templates."""
@@ -443,6 +465,79 @@ async def get_template_details(template_id: str):
 class StartPipelineRequest(BaseModel):
     prompt: str
     workspace_path: str = "/workspace"
+
+
+class JobSpec(BaseModel):
+    ref: str
+    agent_type: str
+    vendor: str = "local-ollama"
+    model: Optional[str] = None
+    prompt_template: Optional[str] = "{{original_prompt}}"
+    command_template: Optional[str] = None
+    max_iterations: int = 15
+    timeout_seconds: int = 300
+    artifact_strategy: Optional[dict] = None
+    retry_strategy: Optional[dict] = None
+
+
+class StageSpec(BaseModel):
+    name: str
+    stage_order: int
+    jobs: List[JobSpec]
+
+
+class DependencySpec(BaseModel):
+    from_ref: str
+    to_ref: str
+    type: str = "success"
+
+
+class RunPipelineRequest(BaseModel):
+    prompt: str
+    workspace_path: str = "/workspace"
+    stages: List[StageSpec]
+    dependencies: List[DependencySpec] = []
+
+
+@app.post("/pipelines/run")
+async def run_pipeline(request: RunPipelineRequest):
+    """Start a pipeline from an inline spec (no stored template required)."""
+    spec = {
+        "stages": [
+            {
+                "name": stage.name,
+                "stage_order": stage.stage_order,
+                "jobs": [
+                    {
+                        "ref": job.ref,
+                        "agent_type": job.agent_type,
+                        "vendor": job.vendor,
+                        "model": job.model,
+                        "prompt_template": job.prompt_template,
+                        "command_template": job.command_template,
+                        "max_iterations": job.max_iterations,
+                        "timeout_seconds": job.timeout_seconds,
+                        "artifact_strategy": job.artifact_strategy,
+                        "retry_strategy": job.retry_strategy,
+                    }
+                    for job in stage.jobs
+                ],
+            }
+            for stage in request.stages
+        ],
+        "dependencies": [
+            {"from_ref": dep.from_ref, "to_ref": dep.to_ref, "type": dep.type}
+            for dep in request.dependencies
+        ],
+    }
+    pipeline_id = template_manager.instantiate_from_spec(
+        spec=spec,
+        original_prompt=request.prompt,
+        workspace_path=request.workspace_path,
+    )
+    logger.info(f"Started pipeline {pipeline_id} from inline spec")
+    return {"pipeline_id": pipeline_id}
+
 
 @app.post("/pipelines/{template_id}/start")
 async def start_pipeline(template_id: str, request: StartPipelineRequest):
@@ -463,6 +558,28 @@ async def stop_pipeline(pipeline_id: str):
     result = pipeline_service.stop_pipeline(pipeline_id)
     logger.info(f"Stopped pipeline {pipeline_id}")
     return result
+
+
+@app.get("/ui")
+async def ui_redirect():
+    return RedirectResponse(url="/static/index.html")
+
+
+@app.get("/pipelines/jobs/{job_id}/log/since")
+async def job_log_since(job_id: str, line: int = 0):
+    result = pipeline_service.get_job_log(job_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    lines = result['output'].split('\n') if result['output'] else []
+    return {"lines": lines[line:], "total": len(lines), "live": result['is_live']}
+
+
+@app.get("/pipelines/jobs/{job_id}/log/full")
+async def job_log_full(job_id: str):
+    result = pipeline_service.get_job_log(job_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return PlainTextResponse(result['output'] or '')
 
 
 @app.get("/pipelines/running")

@@ -70,10 +70,18 @@ class PipelineService:
                               for dep in deps_rows]
 
                 jobs.append({
-                    "id": job_id,
-                    "agent_type": job_row['agent_type'],
-                    "prompt_template": job_row['prompt_template'],
-                    "dependencies": dependencies
+                    "id":                job_id,
+                    "agent_type":        job_row['agent_type'],
+                    "name":              job_row['name'],
+                    "vendor":            job_row['vendor'],
+                    "model":             job_row['model'],
+                    "prompt_template":   job_row['prompt_template'],
+                    "command_template":  job_row['command_template'],
+                    "max_iterations":    job_row['max_iterations'],
+                    "timeout_seconds":   job_row['timeout_seconds'],
+                    "artifact_strategy": job_row['artifact_strategy'],
+                    "retry_strategy":    job_row['retry_strategy'],
+                    "dependencies":      dependencies,
                 })
 
             stages.append({
@@ -183,10 +191,11 @@ class PipelineService:
                 jobs = []
                 for job_row in jobs_rows:
                     jobs.append({
-                        "name": job_row['agent_type'],
-                        "status": job_row['status'],
-                        "log": job_row['job_output'] or "",
-                        "retries": job_row['retry_count'] or 0
+                        "id":      job_row['job_id'],
+                        "name":    job_row['agent_type'],
+                        "status":  job_row['status'],
+                        "log":     job_row['job_output'] or "",
+                        "retries": job_row['retry_count'] or 0,
                     })
 
                 stages.append({
@@ -195,11 +204,11 @@ class PipelineService:
                 })
 
             result.append({
-                "id": pipeline_id,
-                "name": pipeline_row['original_prompt'][:50],  # Truncate for display
+                "id":          pipeline_id,
+                "name":        pipeline_row['original_prompt'][:50],  # Truncate for display
                 "description": pipeline_row['original_prompt'],
-                "status": pipeline_row['status'],
-                "stages": stages
+                "status":      pipeline_row['status'],
+                "stages":      stages
             })
 
         return result
@@ -245,10 +254,11 @@ class PipelineService:
                 jobs = []
                 for job_row in jobs_rows:
                     jobs.append({
-                        "name": job_row['agent_type'],
-                        "status": job_row['status'],
-                        "log": job_row['job_output'] or "",
-                        "retries": job_row['retry_count'] or 0
+                        "id":      job_row['job_id'],
+                        "name":    job_row['agent_type'],
+                        "status":  job_row['status'],
+                        "log":     job_row['job_output'] or "",
+                        "retries": job_row['retry_count'] or 0,
                     })
 
                 stages.append({
@@ -257,15 +267,31 @@ class PipelineService:
                 })
 
             result.append({
-                "id": pipeline_id,
-                "name": pipeline_row['original_prompt'][:50],  # Truncate for display
-                "description": pipeline_row['original_prompt'],
-                "status": pipeline_row['status'],
+                "id":           pipeline_id,
+                "name":         pipeline_row['original_prompt'][:50],  # Truncate for display
+                "description":  pipeline_row['original_prompt'],
+                "status":       pipeline_row['status'],
                 "completed_at": pipeline_row['completed_at'],
-                "stages": stages
+                "stages":       stages
             })
 
         return result
+
+    def get_job_log(self, job_id: str) -> Optional[dict]:
+        """
+        Returns { 'output': str, 'is_live': bool } or None if job not found.
+        is_live = True when status is 'running' or 'pending' (output may grow).
+        """
+        row = self.db.conn.execute(
+            "SELECT job_output, status FROM jobs WHERE job_id = ?", (job_id,)
+        ).fetchone()
+        if not row:
+            return None
+        live_statuses = ('pending', 'running')
+        return {
+            'output':  row['job_output'] or '',
+            'is_live': row['status'] in live_statuses,
+        }
 
     def get_pipeline(self, pipeline_id: str) -> Optional[dict]:
         """

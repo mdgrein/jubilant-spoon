@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clowder</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #1a1a1a;
+      --sidebar:  #111;
+      --border:   #333;
+      --accent:   #5af;
+      --muted:    #666;
+      --text:     #ddd;
+      --head:     #888;
+      --run:      #fa0;
+      --ok:       #4c4;
+      --fail:     #e44;
+      --pending:  #888;
+      --retry:    #f80;
+    }
+
+    html, body { height: 100%; background: var(--bg); color: var(--text);
+      font-family: 'Consolas', 'Menlo', 'Courier New', monospace; font-size: 13px; }
+
+    #app { display: flex; height: 100vh; overflow: hidden; }
+
+    /* ── sidebar ─────────────────────────────────────────── */
+    #sidebar { width: 260px; min-width: 200px; background: var(--sidebar);
+      border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+
+    #sidebar-title { padding: 14px 16px 10px; font-size: 16px; font-weight: bold;
+      letter-spacing: 2px; color: var(--accent); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+
+    #sidebar-scroll { flex: 1; overflow-y: auto; padding: 8px 0; }
+
+    .section-header { padding: 6px 16px 4px; color: var(--head); font-size: 11px;
+      text-transform: uppercase; letter-spacing: 1px; cursor: pointer; user-select: none; }
+    .section-header:hover { color: var(--text); }
+
+    /* indent levels: pipeline=24px, stage=36px, job=48px */
+    .sb-pipeline { padding: 4px 16px 4px 24px; cursor: pointer; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 2px solid transparent; }
+    .sb-stage    { padding: 3px 16px 3px 36px; cursor: pointer; color: var(--muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 2px solid transparent;
+      font-size: 12px; }
+    .sb-job      { padding: 3px 16px 3px 48px; cursor: pointer; color: var(--muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 2px solid transparent;
+      font-size: 12px; }
+    .sb-iteration { padding: 2px 16px 2px 60px; cursor: pointer; color: var(--muted);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 2px solid transparent;
+      font-size: 11px; opacity: 0.8; }
+    .sb-template { padding: 4px 16px 4px 24px; cursor: pointer; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 2px solid transparent; }
+
+    .sb-pipeline:hover, .sb-stage:hover, .sb-job:hover, .sb-template:hover { background: #222; }
+
+    .sb-active { background: #1e2d3d !important; border-left-color: var(--accent) !important;
+      color: var(--accent) !important; }
+
+    /* ── right pane ──────────────────────────────────────── */
+    #right { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+    #detail-panel { flex: 0 0 auto; min-height: 140px; max-height: 45%;
+      border-bottom: 1px solid var(--border); padding: 16px 20px; overflow-y: auto; }
+
+    #detail-title { font-size: 15px; font-weight: bold; margin-bottom: 10px; color: var(--accent); }
+
+    .detail-row { display: flex; gap: 8px; margin-bottom: 4px; }
+    .detail-label { color: var(--muted); min-width: 90px; }
+    .detail-value { color: var(--text); word-break: break-all; }
+
+    .status-running   { color: var(--run); }
+    .status-waiting   { color: #a08020; }
+    .status-completed { color: var(--ok); }
+    .status-failed    { color: var(--fail); }
+    .status-pending   { color: var(--pending); }
+    .status-retrying  { color: var(--retry); }
+    .status-skipped   { color: var(--muted); }
+
+    #detail-actions { margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+    button { background: #2a2a2a; color: var(--text); border: 1px solid var(--border);
+      padding: 5px 14px; cursor: pointer; font-family: inherit; font-size: 12px; border-radius: 3px; }
+    button:hover { background: #333; border-color: var(--accent); color: var(--accent); }
+    button.danger:hover { border-color: var(--fail); color: var(--fail); }
+    button.primary { border-color: var(--accent); color: var(--accent); }
+
+    .copy-btn { background: none; border: none; color: var(--muted); cursor: pointer;
+      font-size: 11px; padding: 0 4px; opacity: 0.5; vertical-align: middle; border-radius: 2px; }
+    .copy-btn:hover { color: var(--accent); opacity: 1; background: none; border: none; }
+    .copy-btn.copied { color: var(--ok); opacity: 1; }
+
+    /* ── log panel ───────────────────────────────────────── */
+    #log-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    #log-header { padding: 6px 20px; border-bottom: 1px solid var(--border); color: var(--head);
+      font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+      display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    #log-status { font-size: 11px; color: var(--run); }
+    #log-output { flex: 1; overflow-y: auto; padding: 12px 20px; white-space: pre-wrap;
+      word-break: break-word; line-height: 1.5; color: #bbb; font-size: 12px; }
+    #log-output .log-line { display: block; }
+
+    /* ── start dialog ────────────────────────────────────── */
+    dialog { background: #1e1e1e; color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; padding: 24px; width: 480px; max-width: 90vw; font-family: inherit; }
+    dialog::backdrop { background: rgba(0,0,0,0.6); }
+    dialog h2 { font-size: 14px; color: var(--accent); margin-bottom: 16px; letter-spacing: 1px; }
+    dialog label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px;
+      margin-top: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    dialog input, dialog textarea { width: 100%; background: #111; color: var(--text);
+      border: 1px solid var(--border); padding: 8px 10px;
+      font-family: inherit; font-size: 13px; border-radius: 3px; }
+    dialog textarea { min-height: 80px; resize: vertical; }
+    dialog input:focus, dialog textarea:focus { outline: none; border-color: var(--accent); }
+    dialog select { width: 100%; background: #111; color: var(--text);
+      border: 1px solid var(--border); padding: 8px 10px;
+      font-family: inherit; font-size: 13px; border-radius: 3px; cursor: pointer; }
+    dialog select:focus { outline: none; border-color: var(--accent); }
+    #dialog-actions { margin-top: 20px; display: flex; gap: 8px; justify-content: flex-end; }
+
+    .empty-state { color: var(--muted); font-style: italic; padding: 8px 0; }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #666; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="sidebar-title">CLOWDER</div>
+    <div id="sidebar-scroll">
+      <div class="section-header">▼ Templates</div>
+      <div id="tpl-list"></div>
+      <div class="section-header" style="margin-top:8px">▼ Running (<span id="running-count">0</span>)</div>
+      <div id="running-list"></div>
+      <div class="section-header" style="margin-top:8px">▼ Recent (<span id="recent-count">0</span>)</div>
+      <div id="recent-list"></div>
+    </div>
+  </div>
+
+  <div id="right">
+    <div id="detail-panel">
+      <div id="detail-title">Clowder</div>
+      <div id="detail-body"><span class="empty-state">Select an item from the sidebar.</span></div>
+      <div id="detail-actions"></div>
+    </div>
+    <div id="log-panel">
+      <div id="log-header">
+        Log Output
+        <span id="log-status"></span>
+      </div>
+      <div id="log-output"></div>
+    </div>
+  </div>
+</div>
+
+<dialog id="start-dialog">
+  <h2>START PIPELINE</h2>
+  <p style="color:var(--muted);font-size:12px" id="dialog-template-name"></p>
+  <label>Prompt</label>
+  <textarea id="dialog-prompt" rows="3" placeholder="Describe the task..."></textarea>
+  <label>Workspace Path</label>
+  <input id="dialog-workspace" type="text" value="D:/workspace">
+  <div id="dialog-actions">
+    <button onclick="closeStartDialog()">Cancel</button>
+    <button class="primary" onclick="submitStartPipeline()">Start</button>
+  </div>
+</dialog>
+
+<dialog id="build-dialog">
+  <h2>BUILD PIPELINE</h2>
+  <p style="color:var(--muted);font-size:12px" id="build-template-name"></p>
+  <label>Prompt</label>
+  <textarea id="build-prompt" rows="3" placeholder="Describe the task..."></textarea>
+  <label>Workspace Path</label>
+  <input id="build-workspace" type="text" value="D:/workspace">
+  <div id="build-jobs-container" style="margin-top:16px"></div>
+  <div id="build-dialog-actions" style="margin-top:20px;display:flex;gap:8px;justify-content:flex-end">
+    <button onclick="closeBuildDialog()">Cancel</button>
+    <button class="primary" onclick="submitBuildPipeline()">Run</button>
+  </div>
+</dialog>
+
+<dialog id="retry-dialog">
+  <h2>RETRY JOB</h2>
+  <p style="color:var(--muted);font-size:12px" id="retry-job-name"></p>
+  <label>Prompt <span style="color:var(--muted);font-weight:normal">(edit to change task before retrying)</span></label>
+  <textarea id="retry-prompt" rows="8"></textarea>
+  <div id="retry-dialog-actions" style="margin-top:20px;display:flex;gap:8px;justify-content:flex-end">
+    <button onclick="closeRetryDialog()">Cancel</button>
+    <button class="primary" onclick="submitRetry()">Retry</button>
+  </div>
+</dialog>
+
+<script>
+// ─── state ────────────────────────────────────────────────────────────────────
+const state = {
+  templates: [],        // array of strings
+  running: [],          // array of pipeline objects
+  recent: [],           // array of pipeline objects
+  selected: null,       // { type: 'template'|'pipeline'|'stage'|'job', data }
+  logJobId: null,
+  logOffset: 0,
+  logTimer: null,
+  refreshTimer: null,
+  followNextRunning: false,  // true while waiting for the next job to start running
+};
+
+// ─── API shape notes ──────────────────────────────────────────────────────────
+// GET /pipelines/templates  → string[]
+// GET /pipelines/running    → { id, name, description, status, stages: [{ name, jobs: [{ id, name, status, prompt, log, retries }] }] }[]
+// GET /pipelines/recent     → same shape
+// GET /pipelines/jobs/{id}/log/since?line=N → { lines: string[], total: int, live: bool }
+// GET /pipelines/jobs/{id}/log/full         → plain text
+
+// ─── status helpers ───────────────────────────────────────────────────────────
+function statusIcon(status) {
+  switch (status) {
+    case 'running':   return '[*]';
+    case 'waiting':   return '[~]';
+    case 'completed': return '[+]';
+    case 'failed':    return '[X]';
+    case 'pending':   return '[ ]';
+    case 'retrying':  return '[R]';
+    case 'skipped':   return '[-]';
+    default:          return '[?]';
+  }
+}
+
+function statusClass(status) {
+  return 'status-' + (status || 'pending');
+}
+
+function shortId(id) {
+  return id ? String(id).slice(0, 8) : '?';
+}
+
+function fmtTime(ts) {
+  if (!ts) return '—';
+  try { return new Date(ts).toLocaleTimeString(); } catch { return ts; }
+}
+
+function fmtLabel(ts) {
+  // HH:MM if today, MM-DD HH:MM otherwise — matches TUI _format_timestamp.
+  if (!ts) return '';
+  try {
+    const dt  = new Date(ts);
+    const now = new Date();
+    const hhmm = dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    if (dt.toDateString() === now.toDateString()) return hhmm;
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const dd = String(dt.getDate()).padStart(2, '0');
+    return `${mm}-${dd} ${hhmm}`;
+  } catch { return ''; }
+}
+
+// ─── API helpers ──────────────────────────────────────────────────────────────
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+async function apiText(path) {
+  const res = await fetch(path);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.text();
+}
+
+// ─── helpers ──────────────────────────────────────────────────────────────────
+function findNextRunningJob(excludeId = null) {
+  for (const p of state.running) {
+    for (const s of (p.stages || [])) {
+      for (const j of (s.jobs || [])) {
+        if (['running', 'retrying'].includes(j.status) && j.id !== excludeId) {
+          return j;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+// ─── data fetching ────────────────────────────────────────────────────────────
+async function fetchAll() {
+  try {
+    const [templates, running, recent] = await Promise.all([
+      api('/pipelines/templates'),
+      api('/pipelines/running'),
+      api('/pipelines/recent?limit=10'),
+    ]);
+    state.templates = templates;  // string[]
+    state.running   = running;
+    state.recent    = recent;
+    renderSidebar();
+
+    // If a running pipeline is now completed, refresh its detail
+    if (state.selected && state.selected.type === 'pipeline') {
+      const pid = state.selected.data.id;
+      const nowRecent    = recent.find(p => p.id === pid);
+      const stillRunning = running.find(p => p.id === pid);
+      if (nowRecent && !stillRunning) {
+        selectItem('pipeline', nowRecent);
+      }
+    }
+
+    // If a job is selected, check if its status changed and refresh the detail panel
+    if (state.selected && state.selected.type === 'job') {
+      const jobId = state.selected.data.id;
+      let updatedJob = null;
+      for (const p of [...running, ...recent]) {
+        for (const s of (p.stages || [])) {
+          const found = (s.jobs || []).find(j => j.id === jobId);
+          if (found) { updatedJob = found; break; }
+        }
+        if (updatedJob) break;
+      }
+      if (updatedJob && updatedJob.status !== state.selected.data.status) {
+        const prevStatus = state.selected.data.status;
+        state.selected.data = { ...state.selected.data, status: updatedJob.status, retries: updatedJob.retries };
+        renderDetail('job', state.selected.data);
+        // If job just finished, stop polling and either auto-switch or fetch full log
+        const wasRunning = ['running', 'retrying'].includes(prevStatus);
+        const nowDone = !['running', 'retrying'].includes(updatedJob.status);
+        if (nowDone && wasRunning && state.logJobId === jobId) {
+          stopLogPolling();
+          // Auto-switch to the next running job if one exists; otherwise enter
+          // follow mode — the next job may still be pending and about to start.
+          const nextJob = findNextRunningJob(jobId);
+          if (nextJob) {
+            selectItem('job', nextJob);
+          } else {
+            state.followNextRunning = true;
+            fetchFullLog(jobId);
+          }
+        }
+      }
+    }
+
+    // Follow mode: switch as soon as the next job starts running
+    if (state.followNextRunning) {
+      if (state.running.length === 0) {
+        state.followNextRunning = false;  // pipeline finished entirely, stop following
+      } else {
+        const nextJob = findNextRunningJob();
+        if (nextJob) selectItem('job', nextJob);
+      }
+    }
+  } catch (e) {
+    console.error('fetchAll error:', e);
+  }
+}
+
+// ─── sidebar rendering ────────────────────────────────────────────────────────
+function renderSidebar() {
+  renderTemplates();
+  renderRunning();
+  renderRecent();
+}
+
+function renderTemplates() {
+  const el = document.getElementById('tpl-list');
+  if (!state.templates.length) {
+    el.innerHTML = '<div class="sb-template empty-state">No templates</div>';
+    return;
+  }
+  el.innerHTML = state.templates.map(t => {
+    // t is a plain string (template ID)
+    const active = isSelected('template', t) ? 'sb-active' : '';
+    const data = { id: t };
+    return `<div class="sb-template ${active}" onclick="selectItem('template', ${safeJson(data)})">${escHtml(t)}</div>`;
+  }).join('');
+}
+
+function renderRunning() {
+  document.getElementById('running-count').textContent = state.running.length;
+  const el = document.getElementById('running-list');
+  if (!state.running.length) {
+    el.innerHTML = '<div class="sb-pipeline empty-state">None running</div>';
+    return;
+  }
+  el.innerHTML = state.running.map(p => pipelineHtml(p)).join('');
+}
+
+function renderRecent() {
+  document.getElementById('recent-count').textContent = state.recent.length;
+  const el = document.getElementById('recent-list');
+  if (!state.recent.length) {
+    el.innerHTML = '<div class="sb-pipeline empty-state">No recent runs</div>';
+    return;
+  }
+  el.innerHTML = state.recent.map(p => pipelineHtml(p)).join('');
+}
+
+function pipelineHtml(p) {
+  // Pipeline row (level 1)
+  const pActive = isSelected('pipeline', p.id) ? 'sb-active' : '';
+  // Pass pipeline without large log fields — only shape info needed for sidebar click
+  const pData = { id: p.id, name: p.name, description: p.description,
+                  status: p.status, created_at: p.created_at,
+                  updated_at: p.updated_at, completed_at: p.completed_at };
+  const ts = fmtLabel(p.completed_at);
+  const tsPrefix = ts ? `<span style="color:var(--muted)">[${ts}]</span> ` : '';
+  const label = escHtml(p.name || shortId(p.id));
+  let html = `
+    <div class="sb-pipeline ${pActive}" onclick="selectItem('pipeline', ${safeJson(pData)})">
+      ${tsPrefix}<span class="${statusClass(p.status)}">${statusIcon(p.status)}</span> ${label}
+    </div>`;
+
+  // Stage rows (level 2)
+  (p.stages || []).forEach(s => {
+    const stageKey = p.id + ':' + s.name;
+    const sActive = isSelected('stage', stageKey) ? 'sb-active' : '';
+    // Aggregate stage status from jobs
+    const jobStatuses = (s.jobs || []).map(j => j.status);
+    const stageStatus = aggregateStatus(jobStatuses);
+    const stageData = { name: s.name, pipeline_id: p.id,
+                        jobs: (s.jobs || []).map(j => ({ id: j.id, name: j.name, status: j.status, retries: j.retries })) };
+    html += `
+      <div class="sb-stage ${sActive}" onclick="event.stopPropagation(); selectItem('stage', ${safeJson(stageData)})">
+        <span class="${statusClass(stageStatus)}">${statusIcon(stageStatus)}</span>
+        ${escHtml(s.name)}
+      </div>`;
+
+    // Job rows (recursive — supports unlimited depth via parent_job_id)
+    html += renderJobsForStage(s.jobs || []);
+  });
+
+  return html;
+}
+
+function renderJobNode(job, allJobs, depth) {
+  const indent = (depth * 16) + 'px';
+  const children = allJobs.filter(j => j.parent_job_id === job.id);
+  const jActive = isSelected('job', job.id) ? 'sb-active' : '';
+  const jData = { id: job.id, name: job.name, status: job.status, retries: job.retries, prompt: job.prompt, iteration: job.iteration };
+  const icon = statusIcon(job.status);
+  const retryLabel = (job.retries || 0) > 0 ? ` (retry #${job.retries})` : '';
+  let html = `
+    <div class="sb-job ${jActive}" style="margin-left:${indent}"
+         onclick="event.stopPropagation(); selectItem('job', ${safeJson(jData)})">
+      <span class="${statusClass(job.status)}">${icon}</span>
+      ${escHtml(job.name || shortId(job.id))}${escHtml(retryLabel)}
+    </div>`;
+
+  // Iteration rows (kept as sub-items under the job)
+  if (job.iteration > 0) {
+    for (let i = 1; i <= job.iteration; i++) {
+      const iterKey = job.id + ':' + i;
+      const iterActive = isSelected('iteration', iterKey) ? 'sb-active' : '';
+      const iterData = { jobId: job.id, iteration: i };
+      html += `
+        <div class="sb-iteration ${iterActive}" style="margin-left:${indent}"
+             onclick="event.stopPropagation(); selectItem('iteration', ${safeJson(iterData)})">
+          ↳ Iteration ${i}
+        </div>`;
+    }
+  }
+
+  // Recursively render child jobs
+  html += children.map(c => renderJobNode(c, allJobs, depth + 1)).join('');
+  return html;
+}
+
+function renderJobsForStage(stageJobs) {
+  const stageJobIds = new Set(stageJobs.map(j => j.id));
+  const roots = stageJobs.filter(j => !j.parent_job_id || !stageJobIds.has(j.parent_job_id));
+  return roots.map(r => renderJobNode(r, stageJobs, 0)).join('');
+}
+
+function aggregateStatus(statuses) {
+  if (!statuses || !statuses.length) return 'pending';
+  if (statuses.some(s => s === 'failed'))    return 'failed';
+  if (statuses.some(s => s === 'retrying'))  return 'retrying';
+  if (statuses.some(s => s === 'running'))   return 'running';
+  if (statuses.every(s => s === 'completed'))return 'completed';
+  if (statuses.every(s => s === 'skipped'))  return 'skipped';
+  return 'pending';
+}
+
+function isSelected(type, id) {
+  if (!state.selected) return false;
+  if (state.selected.type !== type) return false;
+  const d = state.selected.data;
+  if (type === 'template') return d.id === id;
+  if (type === 'pipeline') return d.id === id;
+  if (type === 'stage')    return (d.pipeline_id + ':' + d.name) === id;
+  if (type === 'job')      return d.id === id;
+  if (type === 'iteration') return (d.jobId + ':' + d.iteration) === id;
+  return false;
+}
+
+// ─── selection ────────────────────────────────────────────────────────────────
+function selectItem(type, data) {
+  state.followNextRunning = false;
+  state.selected = { type, data };
+  stopLogPolling();
+  clearLog();
+  renderDetail(type, data);
+
+  if (type === 'job') {
+    const isLive = data.status === 'running' || data.status === 'retrying';
+    if (isLive && data.id) {
+      startLogPolling(data.id);
+    } else if (data.id) {
+      fetchFullLog(data.id);
+    }
+  } else if (type === 'iteration') {
+    fetchIterationLog(data.jobId, data.iteration);
+  } else {
+    // Non-job: show a hint in the log panel
+    document.getElementById('log-output').innerHTML =
+      '<span style="color:var(--muted);font-style:italic">— select a job to view logs —</span>';
+  }
+
+  renderSidebar();  // update active state
+}
+
+// ─── detail panel ─────────────────────────────────────────────────────────────
+function renderDetail(type, data) {
+  const title  = document.getElementById('detail-title');
+  const body   = document.getElementById('detail-body');
+  const acts   = document.getElementById('detail-actions');
+
+  if (type === 'template') {
+    // data = { id: 'template-mock', name?, description?, stages? }
+    title.textContent = data.id;
+    body.innerHTML = rows([['Template ID', data.id]]) +
+      '<span style="color:var(--muted);font-size:11px">loading details…</span>';
+    acts.innerHTML =
+      `<button class="primary" onclick="openStartDialog(${safeJson(data)})">Start Pipeline</button>` +
+      `<button onclick="openBuildDialog(${safeJson(data)})">Build Pipeline</button>`;
+    // Fetch full template details asynchronously
+    api(`/pipelines/templates/${data.id}`).then(tpl => {
+      if (!state.selected || state.selected.data.id !== data.id) return; // navigated away
+      const fields = [['Template ID', tpl.id]];
+      if (tpl.description) fields.push(['Description', tpl.description]);
+      const stageNames = (tpl.stages || []).map(s => s.name).join(' → ');
+      if (stageNames) fields.push(['Stages', stageNames]);
+      const jobCount = (tpl.stages || []).reduce((n, s) => n + (s.jobs || []).length, 0);
+      if (jobCount) fields.push(['Jobs', String(jobCount)]);
+      body.innerHTML = rows(fields);
+    }).catch(() => {
+      if (state.selected && state.selected.data.id === data.id)
+        body.innerHTML = rows([['Template ID', data.id]]);
+    });
+
+  } else if (type === 'pipeline') {
+    // data = { id, name, description, status, created_at, updated_at, completed_at }
+    title.textContent = 'Pipeline: ' + shortId(data.id);
+    const fields = [
+      ['ID',     shortId(data.id), '', data.id],
+      ['Name',   data.name],
+      ['Status', data.status, statusClass(data.status)],
+    ];
+    if (data.description && data.description !== data.name) fields.push(['Desc', data.description]);
+    if (data.created_at)   fields.push(['Created',   fmtTime(data.created_at)]);
+    if (data.updated_at)   fields.push(['Updated',   fmtTime(data.updated_at)]);
+    if (data.completed_at) fields.push(['Completed', fmtTime(data.completed_at)]);
+    body.innerHTML = rows(fields);
+    acts.innerHTML = data.status === 'running'
+      ? `<button class="danger" onclick="stopPipeline('${data.id}')">Stop Pipeline</button>`
+      : '';
+
+  } else if (type === 'stage') {
+    // data = { name, pipeline_id, jobs: [{ id, name, status, retries }] }
+    title.textContent = 'Stage: ' + data.name;
+    const jobLines = (data.jobs || []).map(j =>
+      `<div class="detail-row">
+        <span class="${statusClass(j.status)}">${statusIcon(j.status)}</span>
+        <span class="detail-value">&nbsp;${escHtml(j.name)} — <span class="${statusClass(j.status)}">${escHtml(j.status)}</span></span>
+       </div>`
+    ).join('');
+    body.innerHTML = jobLines || '<span class="empty-state">No jobs in stage.</span>';
+    acts.innerHTML = '';
+
+  } else if (type === 'job') {
+    // data = { id, name, status, retries, prompt }
+    title.textContent = 'Job: ' + (data.name || shortId(data.id));
+    const fields = [
+      ['ID',      shortId(data.id), '', data.id],
+      ['Status',  data.status, statusClass(data.status)],
+      ['Retries', data.retries ?? 0],
+    ];
+    if (data.prompt) fields.push(['Prompt', data.prompt]);
+    body.innerHTML = rows(fields);
+    const canRetry = data.status === 'failed' || data.status === 'skipped';
+    acts.innerHTML = canRetry
+      ? `<button class="primary" onclick="openRetryDialog(${safeJson(data)})">Retry Job</button>`
+      : '';
+  } else if (type === 'iteration') {
+    title.textContent = 'Iteration ' + data.iteration + ' of Job ' + shortId(data.jobId);
+    body.innerHTML = rows([
+      ['Job ID',    shortId(data.jobId), '', data.jobId],
+      ['Iteration', data.iteration]
+    ]);
+    acts.innerHTML = '';
+  }
+}
+
+function rows(fields) {
+  return fields.map(([label, value, cls, copyValue]) => {
+    const btn = copyValue
+      ? `<button class="copy-btn" onclick="copyId(this,'${copyValue}')" title="Copy full ID">⎘</button>`
+      : '';
+    return `
+    <div class="detail-row">
+      <span class="detail-label">${escHtml(String(label))}</span>
+      <span class="detail-value ${cls || ''}">${escHtml(String(value ?? '—'))}${btn}</span>
+    </div>`;
+  }).join('');
+}
+
+async function copyId(btn, fullId) {
+  try {
+    await navigator.clipboard.writeText(fullId);
+  } catch {
+    // Fallback for non-secure contexts
+    const el = Object.assign(document.createElement('textarea'),
+      { value: fullId, style: 'position:fixed;opacity:0' });
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+  }
+  btn.classList.add('copied');
+  btn.textContent = '✓';
+  setTimeout(() => { btn.classList.remove('copied'); btn.textContent = '⎘'; }, 1500);
+}
+
+// ─── log polling ──────────────────────────────────────────────────────────────
+function startLogPolling(jobId) {
+  state.logJobId  = jobId;
+  state.logOffset = 0;
+  document.getElementById('log-status').textContent = '● live';
+  document.getElementById('log-output').innerHTML =
+    '<span style="color:var(--muted);font-style:italic">(waiting for output…)</span>';
+  pollLog();  // immediate first fetch
+  state.logTimer = setInterval(pollLog, 1000);
+}
+
+async function pollLog() {
+  if (!state.logJobId) return;
+  try {
+    const data = await api(`/pipelines/jobs/${state.logJobId}/log/since?line=${state.logOffset}`);
+    if (data.lines && data.lines.length > 0) {
+      if (state.logOffset === 0) clearLog();  // remove "waiting…" placeholder
+      appendLogLines(data.lines);
+      state.logOffset = data.total;
+    }
+    if (!data.live && data.lines.length === 0) {
+      stopLogPolling();
+      if (state.logOffset === 0) {
+        // Job ended with no output at all
+        document.getElementById('log-output').innerHTML =
+          '<span style="color:var(--muted)">(no log output)</span>';
+      }
+    }
+  } catch (e) {
+    console.error('pollLog error:', e);
+  }
+}
+
+function stopLogPolling() {
+  if (state.logTimer) { clearInterval(state.logTimer); state.logTimer = null; }
+  state.logJobId = null;
+  document.getElementById('log-status').textContent = '';
+}
+
+async function fetchFullLog(jobId) {
+  try {
+    document.getElementById('log-status').textContent = 'loading…';
+    const text = await apiText(`/pipelines/jobs/${jobId}/log/full`);
+    clearLog();
+    if (text.trim()) {
+      appendLogLines(text.split('\n'));
+    } else {
+      document.getElementById('log-output').innerHTML =
+        '<span style="color:var(--muted)">(no log output)</span>';
+    }
+  } catch (e) {
+    document.getElementById('log-output').textContent = 'Error loading log: ' + e.message;
+  } finally {
+    document.getElementById('log-status').textContent = '';
+  }
+}
+
+async function fetchIterationLog(jobId, iteration) {
+  try {
+    document.getElementById('log-status').textContent = 'loading iteration log…';
+    const text = await apiText(`/pipelines/jobs/${jobId}/iterations/${iteration}/log`);
+    clearLog();
+    if (text.trim()) {
+      appendLogLines(text.split('\n'));
+    } else {
+      document.getElementById('log-output').innerHTML =
+        '<span style="color:var(--muted)">(no log for this iteration yet)</span>';
+    }
+  } catch (e) {
+    document.getElementById('log-output').textContent = 'Error loading iteration log: ' + e.message;
+  } finally {
+    document.getElementById('log-status').textContent = '';
+  }
+}
+
+function clearLog() {
+  document.getElementById('log-output').innerHTML = '';
+  state.logOffset = 0;
+}
+
+function appendLogLines(lines) {
+  const el = document.getElementById('log-output');
+  const atBottom = el.scrollHeight - el.scrollTop <= el.clientHeight + 20;
+  lines.forEach(line => {
+    const span = document.createElement('span');
+    span.className = 'log-line';
+    span.textContent = line;
+    el.appendChild(span);
+  });
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+// ─── actions ──────────────────────────────────────────────────────────────────
+async function stopPipeline(pipelineId) {
+  if (!confirm('Stop pipeline ' + shortId(pipelineId) + '?')) return;
+  try {
+    await api(`/pipelines/${pipelineId}/stop`, { method: 'POST' });
+    await fetchAll();
+  } catch (e) {
+    alert('Stop failed: ' + e.message);
+  }
+}
+
+// ─── retry dialog ─────────────────────────────────────────────────────────────
+let _retryJobId   = null;
+let _retryOriginalPrompt = null;
+
+function openRetryDialog(job) {
+  _retryJobId = job.id;
+  _retryOriginalPrompt = job.prompt || '';
+  document.getElementById('retry-job-name').textContent = job.name || shortId(job.id);
+  document.getElementById('retry-prompt').value = _retryOriginalPrompt;
+  document.getElementById('retry-dialog').showModal();
+  document.getElementById('retry-prompt').focus();
+}
+
+function closeRetryDialog() {
+  document.getElementById('retry-dialog').close();
+}
+
+async function submitRetry() {
+  const newPrompt = document.getElementById('retry-prompt').value;
+  const promptChanged = newPrompt.trim() !== _retryOriginalPrompt.trim();
+  try {
+    await api(`/pipelines/jobs/${_retryJobId}/retry`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: promptChanged ? newPrompt : null }),
+    });
+    closeRetryDialog();
+    await fetchAll();
+  } catch (e) {
+    alert('Retry failed: ' + e.message);
+  }
+}
+
+document.getElementById('retry-dialog').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeRetryDialog();
+});
+
+// ─── start dialog ─────────────────────────────────────────────────────────────
+let _startTemplateId = null;
+
+function openStartDialog(tpl) {
+  // tpl = { id: 'template-mock' }
+  _startTemplateId = tpl.id;
+  document.getElementById('dialog-template-name').textContent = tpl.id;
+  document.getElementById('dialog-prompt').value = '';
+  document.getElementById('dialog-workspace').value = 'D:/workspace';
+  document.getElementById('start-dialog').showModal();
+  document.getElementById('dialog-prompt').focus();
+}
+
+function closeStartDialog() {
+  document.getElementById('start-dialog').close();
+}
+
+async function submitStartPipeline() {
+  const prompt    = document.getElementById('dialog-prompt').value.trim();
+  const workspace = document.getElementById('dialog-workspace').value.trim();
+  if (!prompt) { document.getElementById('dialog-prompt').focus(); return; }
+  try {
+    await api(`/pipelines/${_startTemplateId}/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, workspace_path: workspace }),
+    });
+    closeStartDialog();
+    await fetchAll();
+  } catch (e) {
+    alert('Start failed: ' + e.message);
+  }
+}
+
+document.getElementById('start-dialog').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeStartDialog();
+});
+
+// ─── build dialog ─────────────────────────────────────────────────────────────
+let _buildTemplate = null;
+
+function openBuildDialog(tpl) {
+  _buildTemplate = tpl;
+  document.getElementById('build-template-name').textContent = tpl.id;
+  document.getElementById('build-prompt').value = '';
+  document.getElementById('build-workspace').value = 'D:/workspace';
+  document.getElementById('build-jobs-container').innerHTML =
+    '<span style="color:var(--muted);font-style:italic">loading template…</span>';
+  document.getElementById('build-dialog').showModal();
+  document.getElementById('build-prompt').focus();
+
+  api(`/pipelines/templates/${tpl.id}`).then(fullTpl => {
+    _buildTemplate = fullTpl;
+    renderBuildJobs(fullTpl.stages || []);
+  }).catch(e => {
+    document.getElementById('build-jobs-container').innerHTML =
+      `<span style="color:var(--fail)">Error: ${escHtml(e.message)}</span>`;
+  });
+}
+
+// ─── vendor / model catalogue ─────────────────────────────────────────────────
+const VENDORS = [
+  { value: 'local-ollama', label: 'Ollama (local)' },
+  { value: 'anthropic',    label: 'Anthropic' },
+  { value: 'alibaba',      label: 'Alibaba' },
+  { value: 'mock',         label: 'Mock (testing)' },
+];
+
+const MODELS = {
+  'local-ollama': [
+    { value: '',               label: '— harness default —' },
+    { value: 'qwen3:8b',      label: 'qwen3:8b' },
+    { value: 'qwen3:14b',     label: 'qwen3:14b' },
+    { value: 'qwen3:32b',     label: 'qwen3:32b' },
+    { value: 'deepseek-r1:8b',  label: 'deepseek-r1:8b' },
+    { value: 'deepseek-r1:14b', label: 'deepseek-r1:14b' },
+    { value: 'llama3.2:3b',   label: 'llama3.2:3b' },
+    { value: 'llama3.3:70b',  label: 'llama3.3:70b' },
+  ],
+  'anthropic': [
+    { value: '',                          label: '— harness default —' },
+    { value: 'claude-sonnet-4-6',         label: 'Claude Sonnet 4.6' },
+    { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+    { value: 'claude-opus-4-6',           label: 'Claude Opus 4.6' },
+  ],
+  'alibaba': [
+    { value: '',             label: '— harness default —' },
+    { value: 'qwen3-32b',   label: 'Qwen3 32B' },
+    { value: 'qwen3-14b',   label: 'Qwen3 14B' },
+  ],
+  'mock': [
+    { value: 'mock-agent', label: 'mock_agent.py (standalone)' },
+    { value: 'mock-model', label: 'mock_model.py (LLM stub)' },
+  ],
+};
+
+function vendorOptions(selected) {
+  return VENDORS.map(v =>
+    `<option value="${v.value}"${v.value === selected ? ' selected' : ''}>${escHtml(v.label)}</option>`
+  ).join('');
+}
+
+function modelOptions(vendor, selected) {
+  const opts = MODELS[vendor] || [{ value: '', label: '— harness default —' }];
+  return opts.map(m =>
+    `<option value="${m.value}"${m.value === (selected || '') ? ' selected' : ''}>${escHtml(m.label)}</option>`
+  ).join('');
+}
+
+function onVendorChange(vendorSel, modelSel) {
+  const v = vendorSel.value;
+  modelSel.innerHTML = modelOptions(v, '');
+}
+
+function renderBuildJobs(stages) {
+  const container = document.getElementById('build-jobs-container');
+  if (!stages.length) {
+    container.innerHTML = '<span class="empty-state">No stages in template.</span>';
+    return;
+  }
+  container.innerHTML = stages.map((stage, si) => {
+    const cards = (stage.jobs || []).map((job, ji) => {
+      const p = `bj-${si}-${ji}`;
+      const vendor = job.vendor || 'local-ollama';
+      return `
+        <div style="background:#111;border:1px solid var(--border);border-radius:4px;padding:12px;margin-bottom:8px">
+          <div style="color:var(--accent);font-size:11px;margin-bottom:8px">${escHtml(job.agent_type)}</div>
+          <label>Vendor</label>
+          <select id="${p}-vendor" onchange="onVendorChange(this, document.getElementById('${p}-model'))">
+            ${vendorOptions(vendor)}
+          </select>
+          <label>Model</label>
+          <select id="${p}-model">
+            ${modelOptions(vendor, job.model || '')}
+          </select>
+          <label>Prompt Template</label>
+          <textarea id="${p}-prompt" rows="3">${escHtml(job.prompt_template || '{{original_prompt}}')}</textarea>
+          <label>Max Iterations</label>
+          <input id="${p}-maxiter" type="number" value="${escHtml(String(job.max_iterations ?? 15))}">
+        </div>`;
+    }).join('');
+    return `
+      <div style="margin-bottom:16px">
+        <div style="color:var(--head);font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${escHtml(stage.name)}</div>
+        ${cards}
+      </div>`;
+  }).join('');
+}
+
+function closeBuildDialog() {
+  document.getElementById('build-dialog').close();
+}
+
+async function submitBuildPipeline() {
+  const prompt    = document.getElementById('build-prompt').value.trim();
+  const workspace = document.getElementById('build-workspace').value.trim();
+  if (!prompt) { document.getElementById('build-prompt').focus(); return; }
+
+  const tpl = _buildTemplate;
+  const stages = (tpl.stages || []).map((stage, si) => ({
+    name: stage.name,
+    stage_order: si,
+    jobs: (stage.jobs || []).map((job, ji) => {
+      const p = `bj-${si}-${ji}`;
+      const vendor = document.getElementById(`${p}-vendor`).value.trim() || job.vendor;
+      const model  = document.getElementById(`${p}-model`).value.trim() || null;
+      let command_template = null;
+      if (vendor === 'mock') {
+        if (model === 'mock-model') {
+          command_template = 'python -u agents/mock_model.py';
+        } else {
+          command_template = 'python -u agents/mock_agent.py --agent-type {{agent_type}} --duration 2.0';
+        }
+      }
+      return {
+        ref:              job.agent_type,
+        agent_type:       job.agent_type,
+        vendor:           command_template ? 'mock' : vendor,
+        model:            command_template ? null : model,
+        prompt_template:  document.getElementById(`${p}-prompt`).value.trim() || job.prompt_template,
+        max_iterations:   parseInt(document.getElementById(`${p}-maxiter`).value, 10) || job.max_iterations,
+        timeout_seconds:  job.timeout_seconds,
+        artifact_strategy: job.artifact_strategy ? JSON.parse(job.artifact_strategy) : null,
+        retry_strategy:    job.retry_strategy    ? JSON.parse(job.retry_strategy)    : null,
+        command_template,
+      };
+    }),
+  }));
+
+  // Derive dependencies from the template job dependency list
+  const deps = [];
+  (tpl.stages || []).forEach(stage => {
+    (stage.jobs || []).forEach(job => {
+      (job.dependencies || []).forEach(dep => {
+        deps.push({ from_ref: dep.depends_on, to_ref: job.agent_type, type: dep.type });
+      });
+    });
+  });
+
+  try {
+    await api('/pipelines/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, workspace_path: workspace, stages, dependencies: deps }),
+    });
+    closeBuildDialog();
+    await fetchAll();
+  } catch (e) {
+    alert('Build failed: ' + e.message);
+  }
+}
+
+document.getElementById('build-dialog').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeBuildDialog();
+});
+
+// ─── utilities ────────────────────────────────────────────────────────────────
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function safeJson(obj) {
+  return JSON.stringify(obj)
+    .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ─── init ─────────────────────────────────────────────────────────────────────
+async function init() {
+  await fetchAll();
+  state.refreshTimer = setInterval(fetchAll, 2000);
+}
+
+init();
+</script>
+</body>
+</html>

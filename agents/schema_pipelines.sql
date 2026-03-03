@@ -33,6 +33,8 @@ CREATE TABLE template_jobs (
     command_template TEXT,  -- Optional: custom command instead of harness (supports {{job_id}}, {{prompt}}, etc.)
     max_iterations INTEGER DEFAULT 50,
     timeout_seconds INTEGER DEFAULT 300,
+    model TEXT,               -- e.g. 'deepseek-r1:8b', 'qwen3-32b'; NULL = harness default
+    vendor TEXT DEFAULT 'local-ollama',  -- 'local-ollama', 'alibaba', or 'anthropic'
     artifact_strategy JSON,  -- Defines how artifacts are collected (e.g., {"type": "stdout_final"} or {"type": "git_diff"})
     job_multiplier JSON,  -- Defines dynamic job spawning from another job's output (e.g., {"source_job_id": "job-planner", "parse_strategy": "json_array"})
     retry_strategy JSON,  -- How to handle retries (e.g., {"include_context": true, "context_instruction": "Continue from where you left off..."})
@@ -43,7 +45,7 @@ CREATE TABLE template_jobs (
 CREATE TABLE template_job_dependencies (
     template_job_id TEXT NOT NULL,
     depends_on_template_job_id TEXT NOT NULL,
-    dependency_type TEXT DEFAULT 'success' CHECK(dependency_type IN ('success', 'failure', 'always')),
+    dependency_type TEXT DEFAULT 'success' CHECK(dependency_type IN ('success', 'failure', 'always', 'completed')),
     PRIMARY KEY(template_job_id, depends_on_template_job_id),
     FOREIGN KEY(template_job_id) REFERENCES template_jobs(template_job_id) ON DELETE CASCADE,
     FOREIGN KEY(depends_on_template_job_id) REFERENCES template_jobs(template_job_id) ON DELETE CASCADE
@@ -106,6 +108,8 @@ CREATE TABLE jobs (
     -- Execution constraints
     max_iterations INTEGER NOT NULL,
     timeout_seconds INTEGER NOT NULL,
+    model TEXT,               -- e.g. 'deepseek-r1:8b', 'qwen3-32b'; NULL = harness default
+    vendor TEXT NOT NULL DEFAULT 'local-ollama',  -- 'local-ollama', 'alibaba', or 'anthropic'
     allowed_paths TEXT NOT NULL,  -- JSON array
 
     -- Status tracking
@@ -152,7 +156,7 @@ CREATE INDEX idx_jobs_parent ON jobs(parent_job_id);
 CREATE TABLE job_dependencies (
     job_id TEXT NOT NULL,
     depends_on_job_id TEXT NOT NULL,
-    dependency_type TEXT DEFAULT 'success' CHECK(dependency_type IN ('success', 'failure', 'always')),
+    dependency_type TEXT DEFAULT 'success' CHECK(dependency_type IN ('success', 'failure', 'always', 'completed')),
     PRIMARY KEY(job_id, depends_on_job_id),
     FOREIGN KEY(job_id) REFERENCES jobs(job_id) ON DELETE CASCADE,
     FOREIGN KEY(depends_on_job_id) REFERENCES jobs(job_id) ON DELETE CASCADE
