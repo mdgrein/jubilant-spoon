@@ -21,8 +21,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Allow importing db.py from agents/
+# Allow importing db.py from agents/ and log_levels.py from project root
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from db import ClowderDB
 import log_levels  # noqa: F401  registers TRACE and MODEL levels
 from vendor_local_ollama import call_ollama

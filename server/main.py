@@ -12,7 +12,8 @@ import uuid
 from uuid import UUID
 import logging
 
-# Add agents directory to path for imports
+# Add project root and agents directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "agents"))
 
 from db import ClowderDB
@@ -20,10 +21,8 @@ from templates import TemplateManager
 from server.services import PipelineService
 from artifact_strategies import get_strategy
 from job_multiplier import check_and_spawn_multiplied_jobs
-
-# Custom TRACE level (below DEBUG)
-TRACE = 5
-logging.addLevelName(TRACE, "TRACE")
+import log_levels  # noqa: F401  registers TRACE and MODEL levels
+from log_levels import TRACE, MODEL
 
 
 # Custom file handler that flushes after every write
@@ -621,13 +620,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--log-level",
         default="INFO",
-        choices=["TRACE", "DEBUG", "INFO", "WARNING", "ERROR"],
+        choices=["TRACE", "MODEL", "DEBUG", "INFO", "WARNING", "ERROR"],
         help="Minimum log level to display (default: INFO)",
     )
     args = parser.parse_args()
 
     # Convert log level string to number
-    log_level_map = {"TRACE": TRACE, "DEBUG": logging.DEBUG, "INFO": logging.INFO,
+    log_level_map = {"TRACE": TRACE, "MODEL": MODEL, "DEBUG": logging.DEBUG, "INFO": logging.INFO,
                      "WARNING": logging.WARNING, "ERROR": logging.ERROR}
     min_log_level = log_level_map[args.log_level]
 
@@ -682,9 +681,10 @@ if __name__ == "__main__":
     }
 
     print(f"Starting server with log level: {args.log_level}")
-    print(f"  - Orchestrator messages: INFO")
-    print(f"  - Model streaming: DEBUG")
-    print(f"  - HTTP requests: TRACE")
+    print(f"  - Orchestrator events:  INFO")
+    print(f"  - Harness internals:    DEBUG")
+    print(f"  - Raw model tokens:     MODEL")
+    print(f"  - HTTP requests:        TRACE")
     print(f"  - Showing logs at level: {args.log_level} and above")
     print()
 
