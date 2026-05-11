@@ -1,0 +1,5 @@
+name: Hello World
+description: A simple pipeline that prints a message.
+steps:
+  - name: Print Message
+    script: echo "Hello, World!"

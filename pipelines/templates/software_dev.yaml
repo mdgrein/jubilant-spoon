@@ -1,0 +1,27 @@
+name: Software Development
+description: A multi-stage software development pipeline with review, refactoring, and verification.
+stages:
+  - name: Development
+    jobs:
+      - name: Write Code
+        script: "python -c \"import random,time,sys; print('Writing application code...'); time.sleep(random.randint(1,10)); sys.exit(1) if random.random()<0.1 else None; print('Code written successfully.')\""
+      - name: Write Tests
+        script: "python -c \"import random,time,sys; print('Writing unit tests...'); time.sleep(random.randint(1,10)); sys.exit(1) if random.random()<0.1 else None; print('Tests written successfully.')\""
+  - name: Review
+    jobs:
+      - name: Code Review
+        script: "python -c \"import random,time,sys; print('Reviewing code for issues...'); time.sleep(random.randint(1,10)); sys.exit(1) if random.random()<0.1 else None; print('Code review passed.')\""
+  - name: Refactor
+    jobs:
+      - name: Apply Refactoring
+        script: "python -c \"import random,time,sys; print('Applying refactoring suggestions...'); time.sleep(random.randint(1,10)); sys.exit(1) if random.random()<0.1 else None; print('Refactoring complete.')\""
+  - name: Verification
+    jobs:
+      - name: Run Tests
+        script: "python -c \"import random,time,sys; print('Running test suite...'); time.sleep(random.randint(1,10)); sys.exit(1) if random.random()<0.1 else None; print('All tests passed.')\""
+      - name: Run Linter
+        script: "python -c \"import random,time,sys; print('Running linter checks...'); time.sleep(random.randint(1,10)); sys.exit(1) if random.random()<0.1 else None; print('Linting passed.')\""
+  - name: Notification
+    jobs:
+      - name: Send Notification
+        script: "python -c \"import random,time,sys; print('Sending completion notification...'); time.sleep(random.randint(1,10)); sys.exit(1) if random.random()<0.1 else None; print('Notification sent.')\""
