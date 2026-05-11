@@ -1,2 +1,0 @@
-# Minimal dependencies for agent orchestrator
-# (No external dependencies required - uses subprocess to call WSL)

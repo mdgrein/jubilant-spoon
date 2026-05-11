@@ -13,15 +13,17 @@ from pathlib import Path
 
 import pytest
 
-# agents/ must be on sys.path before any harness imports.
-AGENTS_DIR = Path(__file__).parent.parent / "agents"
-sys.path.insert(0, str(AGENTS_DIR))
+# harnesses/ and pipeline/ must be on sys.path before any harness imports.
+HARNESSES_DIR = Path(__file__).parent.parent / "harnesses"
+PIPELINE_DIR = Path(__file__).parent.parent / "pipeline"
+sys.path.insert(0, str(HARNESSES_DIR))
+sys.path.insert(0, str(PIPELINE_DIR))
 
-import harness_common as hc
-from db import ClowderDB
+import harness_common as hc  # noqa: E402
+from db import ClowderDB  # noqa: E402
 
-SCHEMA_SQL = AGENTS_DIR / "schema_pipelines.sql"
-MOCK_MODEL = AGENTS_DIR / "mock_model.py"
+MOCK_MODEL = HARNESSES_DIR / "mock_model.py"
+_PIPELINE_SCHEMA = (PIPELINE_DIR / "schema_pipelines.sql").read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -31,10 +33,10 @@ MOCK_MODEL = AGENTS_DIR / "mock_model.py"
 
 @pytest.fixture()
 def tmp_db(tmp_path):
-    """A temporary ClowderDB with the pipeline schema applied."""
+    """A file-based ClowderDB with the pipeline schema applied (required for multi-connection tests)."""
     db_path = tmp_path / "clowder.db"
     db = ClowderDB(str(db_path))
-    db.conn.executescript(SCHEMA_SQL.read_text())
+    db.conn.executescript(_PIPELINE_SCHEMA)
     db.conn.commit()
     yield db
     db.close()
@@ -280,10 +282,10 @@ class TestCallModel:
         monkeypatch.setenv("MOCK_MODEL_STDERR", "thinking...|still thinking...")
         monkeypatch.setenv("MOCK_MODEL_DELAY", "0")
 
-        result = hc.call_model("test prompt")
+        result = hc.call_model("test prompt", vendor="local-ollama", model="qwen3:8b")
 
-        assert result == "result = 42"          # stripped by .strip()
-        assert "thinking" not in result         # stderr must not leak into return
+        assert result == "result = 42"  # stripped by .strip()
+        assert "thinking" not in result  # stderr must not leak into return
 
     def test_stderr_forwarded_to_process_stdout(self, ollama_env, monkeypatch, capsys):
         """Both model stdout and stderr must be printed to the harness process stdout."""
@@ -291,12 +293,12 @@ class TestCallModel:
         monkeypatch.setenv("MOCK_MODEL_STDERR", "THINKING_MARKER_A|THINKING_MARKER_B")
         monkeypatch.setenv("MOCK_MODEL_DELAY", "0")
 
-        hc.call_model("test prompt")
+        hc.call_model("test prompt", vendor="local-ollama", model="qwen3:8b")
 
         out = capsys.readouterr().out
-        assert "THINKING_MARKER_A" in out   # stderr forwarded
+        assert "THINKING_MARKER_A" in out  # stderr forwarded
         assert "THINKING_MARKER_B" in out
-        assert "x = 1" in out              # stdout also forwarded
+        assert "x = 1" in out  # stdout also forwarded
 
     def test_staggered_lines_all_arrive(self, ollama_env, monkeypatch, capsys):
         """All staggered stderr lines must be captured even with delays."""
@@ -305,20 +307,22 @@ class TestCallModel:
         monkeypatch.setenv("MOCK_MODEL_STDOUT", "done = True\n")
         monkeypatch.setenv("MOCK_MODEL_DELAY", "0.02")  # 20 ms per line
 
-        result = hc.call_model("test prompt")
+        result = hc.call_model("test prompt", vendor="local-ollama", model="qwen3:8b")
 
         out = capsys.readouterr().out
         for line in lines:
             assert line in out, f"Expected '{line}' in forwarded output"
         assert result == "done = True"
 
-    def test_stderr_and_stdout_interleaved_correctly(self, ollama_env, monkeypatch, capsys):
+    def test_stderr_and_stdout_interleaved_correctly(
+        self, ollama_env, monkeypatch, capsys
+    ):
         """Stdout artifact arrives after all stderr thinking lines."""
         monkeypatch.setenv("MOCK_MODEL_STDERR", "THINKING_LINE")
         monkeypatch.setenv("MOCK_MODEL_STDOUT", "ARTIFACT_LINE\n")
         monkeypatch.setenv("MOCK_MODEL_DELAY", "0")
 
-        result = hc.call_model("test prompt")
+        result = hc.call_model("test prompt", vendor="local-ollama", model="qwen3:8b")
 
         out = capsys.readouterr().out
         assert "THINKING_LINE" in out
@@ -333,7 +337,7 @@ class TestCallModel:
         monkeypatch.setenv("MOCK_MODEL_STDOUT", "pass\n")
         monkeypatch.setenv("MOCK_MODEL_DELAY", "0")
 
-        result = hc.call_model("prompt")
+        result = hc.call_model("prompt", vendor="local-ollama", model="qwen3:8b")
         assert result == "pass"
 
     def test_thinking_block_in_stdout_returned_raw(self, ollama_env, monkeypatch):
@@ -342,17 +346,19 @@ class TestCallModel:
         monkeypatch.setenv("MOCK_MODEL_STDERR", "")
         monkeypatch.setenv("MOCK_MODEL_DELAY", "0")
 
-        result = hc.call_model("prompt")
+        result = hc.call_model("prompt", vendor="local-ollama", model="qwen3:8b")
         # Raw return includes the think tag — stripping is the harness's job
         assert "<think>" in result
 
-    def test_unicode_in_model_output_does_not_crash(self, ollama_env, monkeypatch, capsys):
+    def test_unicode_in_model_output_does_not_crash(
+        self, ollama_env, monkeypatch, capsys
+    ):
         """Unicode characters (e.g. Braille spinner \u2819) must not raise UnicodeEncodeError."""
         monkeypatch.setenv("MOCK_MODEL_STDERR", "\u2819 spinning \u2819")
         monkeypatch.setenv("MOCK_MODEL_STDOUT", "x = 1\n")
         monkeypatch.setenv("MOCK_MODEL_DELAY", "0")
 
-        result = hc.call_model("prompt")
+        result = hc.call_model("prompt", vendor="local-ollama", model="qwen3:8b")
         assert result == "x = 1"
 
     def test_multiline_stdout_joined_correctly(self, ollama_env, monkeypatch):
@@ -362,9 +368,19 @@ class TestCallModel:
         monkeypatch.setenv("MOCK_MODEL_STDERR", "")
         monkeypatch.setenv("MOCK_MODEL_DELAY", "0")
 
-        result = hc.call_model("prompt")
+        result = hc.call_model("prompt", vendor="local-ollama", model="qwen3:8b")
         assert "def foo" in result
         assert "def bar" in result
+
+    def test_raises_when_model_is_none(self):
+        """call_model must raise ValueError when model is not specified."""
+        with pytest.raises(ValueError, match="model"):
+            hc.call_model("prompt", vendor="local-ollama", model=None)
+
+    def test_raises_when_model_is_empty(self):
+        """Empty string model is also invalid."""
+        with pytest.raises(ValueError, match="model"):
+            hc.call_model("prompt", vendor="local-ollama", model="")
 
 
 # ---------------------------------------------------------------------------
@@ -532,8 +548,13 @@ class TestCountDevAttempts:
 
 class TestSpawnRetryJobs:
     def test_creates_dev_and_verifier_jobs(self, tmp_db, tmp_path):
-        _insert_job(tmp_db, job_id=str(uuid.uuid4()), workspace_path=str(tmp_path),
-                    pipeline_id="pipe-1", stage_id="stage-1")
+        _insert_job(
+            tmp_db,
+            job_id=str(uuid.uuid4()),
+            workspace_path=str(tmp_path),
+            pipeline_id="pipe-1",
+            stage_id="stage-1",
+        )
         dev_id, verify_id = hc.spawn_retry_jobs(
             db=tmp_db,
             pipeline_id="pipe-1",
@@ -558,8 +579,13 @@ class TestSpawnRetryJobs:
         assert "verifier" in types
 
     def test_verifier_depends_on_dev_with_completed_type(self, tmp_db, tmp_path):
-        _insert_job(tmp_db, job_id=str(uuid.uuid4()), workspace_path=str(tmp_path),
-                    pipeline_id="pipe-1", stage_id="stage-1")
+        _insert_job(
+            tmp_db,
+            job_id=str(uuid.uuid4()),
+            workspace_path=str(tmp_path),
+            pipeline_id="pipe-1",
+            stage_id="stage-1",
+        )
         dev_id, verify_id = hc.spawn_retry_jobs(
             db=tmp_db,
             pipeline_id="pipe-1",
@@ -580,8 +606,13 @@ class TestSpawnRetryJobs:
         assert dep["dependency_type"] == "completed"
 
     def test_dev_prompt_includes_failure_context(self, tmp_db, tmp_path):
-        _insert_job(tmp_db, job_id=str(uuid.uuid4()), workspace_path=str(tmp_path),
-                    pipeline_id="pipe-1", stage_id="stage-1")
+        _insert_job(
+            tmp_db,
+            job_id=str(uuid.uuid4()),
+            workspace_path=str(tmp_path),
+            pipeline_id="pipe-1",
+            stage_id="stage-1",
+        )
         failure_msg = "AssertionError: expected 1 got 2"
         dev_id, _ = hc.spawn_retry_jobs(
             db=tmp_db,
@@ -602,8 +633,13 @@ class TestSpawnRetryJobs:
         assert "VERIFIER FEEDBACK" in job["prompt"]
 
     def test_verifier_uses_original_prompt(self, tmp_db, tmp_path):
-        _insert_job(tmp_db, job_id=str(uuid.uuid4()), workspace_path=str(tmp_path),
-                    pipeline_id="pipe-1", stage_id="stage-1")
+        _insert_job(
+            tmp_db,
+            job_id=str(uuid.uuid4()),
+            workspace_path=str(tmp_path),
+            pipeline_id="pipe-1",
+            stage_id="stage-1",
+        )
         original = "FILENAME: foo.py\n\nThe real task."
         _, verify_id = hc.spawn_retry_jobs(
             db=tmp_db,
@@ -656,6 +692,7 @@ class TestRunRuff:
 # ---------------------------------------------------------------------------
 # generate_stub
 # ---------------------------------------------------------------------------
+
 
 class TestGenerateStub:
     """Tests for harness_common.generate_stub()."""

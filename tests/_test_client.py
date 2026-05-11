@@ -2,7 +2,7 @@ import asyncio
 import inspect
 import requests as requests_lib
 import pytest
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import MagicMock, Mock
 
 from textual.widgets import Button
 from client.main import ClowderClientApp
@@ -17,6 +17,7 @@ async def _settle():
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mock_api_client():
@@ -45,81 +46,122 @@ def mock_templates_resp():
 
 @pytest.fixture
 def mock_running_resp():
-    return _make_resp([
-        {
-            "id": "aaaa-bbbb",
-            "name": "build-and-test",
-            "description": "CI pipeline",
-            "status": "running",
-            "stages": [
-                {
-                    "name": "Build",
-                    "jobs": [
-                        {"name": "compile", "status": "completed", "log": "OK", "retries": 0},
-                        {"name": "lint", "status": "running", "log": None, "retries": 0},
-                    ],
-                }
-            ],
-        },
-    ])
+    return _make_resp(
+        [
+            {
+                "id": "aaaa-bbbb",
+                "name": "build-and-test",
+                "description": "CI pipeline",
+                "status": "running",
+                "stages": [
+                    {
+                        "name": "Build",
+                        "jobs": [
+                            {
+                                "name": "compile",
+                                "status": "completed",
+                                "log": "OK",
+                                "retries": 0,
+                            },
+                            {
+                                "name": "lint",
+                                "status": "running",
+                                "log": None,
+                                "retries": 0,
+                            },
+                        ],
+                    }
+                ],
+            },
+        ]
+    )
 
 
 @pytest.fixture
 def mock_running_resp_updated():
     """Same structure as mock_running_resp but lint is now completed."""
-    return _make_resp([
-        {
-            "id": "aaaa-bbbb",
-            "name": "build-and-test",
-            "description": "CI pipeline",
-            "status": "completed",
-            "stages": [
-                {
-                    "name": "Build",
-                    "jobs": [
-                        {"name": "compile", "status": "completed", "log": "OK", "retries": 0},
-                        {"name": "lint", "status": "completed", "log": "All good", "retries": 0},
-                    ],
-                }
-            ],
-        },
-    ])
+    return _make_resp(
+        [
+            {
+                "id": "aaaa-bbbb",
+                "name": "build-and-test",
+                "description": "CI pipeline",
+                "status": "completed",
+                "stages": [
+                    {
+                        "name": "Build",
+                        "jobs": [
+                            {
+                                "name": "compile",
+                                "status": "completed",
+                                "log": "OK",
+                                "retries": 0,
+                            },
+                            {
+                                "name": "lint",
+                                "status": "completed",
+                                "log": "All good",
+                                "retries": 0,
+                            },
+                        ],
+                    }
+                ],
+            },
+        ]
+    )
 
 
 @pytest.fixture
 def mock_running_resp_two_pipelines():
     """Two pipelines — triggers structural change (full rebuild)."""
-    return _make_resp([
-        {
-            "id": "aaaa-bbbb",
-            "name": "build-and-test",
-            "description": "CI pipeline",
-            "status": "running",
-            "stages": [
-                {
-                    "name": "Build",
-                    "jobs": [
-                        {"name": "compile", "status": "completed", "log": "OK", "retries": 0},
-                        {"name": "lint", "status": "running", "log": None, "retries": 0},
-                    ],
-                }
-            ],
-        },
-        {
-            "id": "cccc-dddd",
-            "name": "deploy-staging",
-            "description": "Deploy pipeline",
-            "status": "running",
-            "stages": [
-                {
-                    "name": "Deploy",
-                    "jobs": [
-                        {"name": "push", "status": "running", "log": None, "retries": 0},
-                    ],
-                }
-            ],
-        },
-    ])
+    return _make_resp(
+        [
+            {
+                "id": "aaaa-bbbb",
+                "name": "build-and-test",
+                "description": "CI pipeline",
+                "status": "running",
+                "stages": [
+                    {
+                        "name": "Build",
+                        "jobs": [
+                            {
+                                "name": "compile",
+                                "status": "completed",
+                                "log": "OK",
+                                "retries": 0,
+                            },
+                            {
+                                "name": "lint",
+                                "status": "running",
+                                "log": None,
+                                "retries": 0,
+                            },
+                        ],
+                    }
+                ],
+            },
+            {
+                "id": "cccc-dddd",
+                "name": "deploy-staging",
+                "description": "Deploy pipeline",
+                "status": "running",
+                "stages": [
+                    {
+                        "name": "Deploy",
+                        "jobs": [
+                            {
+                                "name": "push",
+                                "status": "running",
+                                "log": None,
+                                "retries": 0,
+                            },
+                        ],
+                    }
+                ],
+            },
+        ]
+    )
 
 
 @pytest.fixture
@@ -129,18 +171,21 @@ def mock_empty_running_resp():
 
 def _route_get(templates_resp, running_resp):
     """Return a side_effect callable that routes by URL."""
+
     def _get(url, **kwargs):
         if "templates" in url:
             return templates_resp
         if "running" in url:
             return running_resp
         return _make_resp([])
+
     return _get
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _get_detail_text(app):
     """Return the text content of the first Static in #detail_panel."""
@@ -229,6 +274,7 @@ async def test_selecting_template_shows_start_button(mock_api_client):
 
         # Simulate highlight
         from textual.widgets import Tree as TreeWidget
+
         app.on_tree_node_highlighted(TreeWidget.NodeHighlighted(template_node))
         await pilot.pause()
 
@@ -242,7 +288,10 @@ async def test_starting_pipeline_via_button(mock_api_client):
     """Clicking 'Start Pipeline' should POST to the server and notify."""
     mock_api_client.fetch_templates.return_value = ["build-and-test", "deploy-staging"]
     mock_api_client.fetch_running_pipelines.return_value = []
-    mock_api_client.start_pipeline.return_value = {"name": "build-and-test", "id": "new-id"}
+    mock_api_client.start_pipeline.return_value = {
+        "name": "build-and-test",
+        "id": "new-id",
+    }
 
     app = ClowderClientApp(api_client=mock_api_client)
     async with app.run_test() as pilot:
@@ -253,6 +302,7 @@ async def test_starting_pipeline_via_button(mock_api_client):
         tree = app.query_one("#nav_tree")
         template_node = tree.root.children[0].children[0]
         from textual.widgets import Tree as TreeWidget
+
         app.on_tree_node_highlighted(TreeWidget.NodeHighlighted(template_node))
         await pilot.pause()
 
@@ -280,6 +330,7 @@ async def test_selecting_pipeline_shows_stop_button(mock_api_client, mock_runnin
         pipeline_node = running_node.children[0]
 
         from textual.widgets import Tree as TreeWidget
+
         app.on_tree_node_highlighted(TreeWidget.NodeHighlighted(pipeline_node))
         await pilot.pause()
 
@@ -305,6 +356,7 @@ async def test_selecting_stage_shows_jobs_overview(mock_api_client, mock_running
         stage_node = pipeline_node.children[0]
 
         from textual.widgets import Tree as TreeWidget
+
         app.on_tree_node_highlighted(TreeWidget.NodeHighlighted(stage_node))
         await pilot.pause()
 
@@ -333,6 +385,7 @@ async def test_selecting_job_shows_log(mock_api_client, mock_running_resp):
         job_node = stage_node.children[0]  # compile
 
         from textual.widgets import Tree as TreeWidget
+
         app.on_tree_node_highlighted(TreeWidget.NodeHighlighted(job_node))
         await pilot.pause()
 
@@ -406,14 +459,21 @@ async def test_navigate_tree_with_arrow_keys(mock_api_client, mock_running_resp)
 
         # Navigate down through all nodes
         expected_types = [
-            "templates_header", "template", "template",
-            "running_header", "pipeline", "stage", "job", "job",
+            "templates_header",
+            "template",
+            "template",
+            "running_header",
+            "pipeline",
+            "stage",
+            "job",
+            "job",
         ]
         for expected in expected_types:
             tree.action_cursor_down()
             await _settle()
-            assert tree.cursor_node.data["type"] == expected, \
+            assert tree.cursor_node.data["type"] == expected, (
                 f"Expected {expected}, got {tree.cursor_node.data['type']}"
+            )
 
         # Navigate back up
         tree.action_cursor_up()
@@ -518,7 +578,9 @@ async def test_expand_collapse_nodes(mock_api_client, mock_running_resp):
 
 
 @pytest.mark.asyncio
-async def test_full_tree_navigation_with_running_pipeline(mock_api_client, mock_running_resp):
+async def test_full_tree_navigation_with_running_pipeline(
+    mock_api_client, mock_running_resp
+):
     """Navigate all 9 positions and verify detail content at each."""
     mock_api_client.fetch_templates.return_value = ["build-and-test", "deploy-staging"]
     mock_api_client.fetch_running_pipelines.return_value = mock_running_resp.json()
@@ -619,7 +681,10 @@ async def test_start_pipeline_keyboard_flow(mock_api_client):
     """Navigate to template with keys, Tab to Start button, Enter to activate."""
     mock_api_client.fetch_templates.return_value = ["build-and-test", "deploy-staging"]
     mock_api_client.fetch_running_pipelines.return_value = []
-    mock_api_client.start_pipeline.return_value = {"name": "build-and-test", "id": "new-id"}
+    mock_api_client.start_pipeline.return_value = {
+        "name": "build-and-test",
+        "id": "new-id",
+    }
 
     app = ClowderClientApp(api_client=mock_api_client)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -656,7 +721,10 @@ async def test_stop_pipeline_keyboard_flow(mock_api_client, mock_running_resp):
     """Navigate to pipeline with keys, Tab to Stop button, Enter to activate."""
     mock_api_client.fetch_templates.return_value = ["build-and-test", "deploy-staging"]
     mock_api_client.fetch_running_pipelines.return_value = mock_running_resp.json()
-    mock_api_client.stop_pipeline.return_value = {"name": "build-and-test", "id": "aaaa-bbbb"}
+    mock_api_client.stop_pipeline.return_value = {
+        "name": "build-and-test",
+        "id": "aaaa-bbbb",
+    }
 
     app = ClowderClientApp(api_client=mock_api_client)
     async with app.run_test(size=(120, 40)) as pilot:
@@ -729,7 +797,10 @@ async def test_in_place_update_changes_labels_not_structure(
 
         # Same node objects (in-place, not rebuilt)
         assert tree.root.children[1].children[0] is original_pipeline_node
-        assert tree.root.children[1].children[0].children[0].children[1] is original_lint_node
+        assert (
+            tree.root.children[1].children[0].children[0].children[1]
+            is original_lint_node
+        )
 
         # But data and labels updated
         assert original_lint_node.data["status"] == "completed"
@@ -765,8 +836,8 @@ async def test_structural_change_triggers_full_rebuild(
         running_node = tree.root.children[1]
         assert len(running_node.children) == 2
         labels = [str(c.label) for c in running_node.children]
-        assert any("build-and-test" in l for l in labels)
-        assert any("deploy-staging" in l for l in labels)
+        assert any("build-and-test" in lb for lb in labels)
+        assert any("deploy-staging" in lb for lb in labels)
 
 
 @pytest.mark.asyncio
@@ -774,6 +845,7 @@ async def test_poll_refresh_is_async(mock_api_client):
     """_poll_refresh should be an async method and app should have _refreshing flag."""
     # Return empty lists initially, then raise exception on subsequent calls
     call_count = [0]
+
     def maybe_fail(*args, **kwargs):
         call_count[0] += 1
         if call_count[0] > 2:  # Let first couple calls succeed
@@ -808,9 +880,15 @@ async def test_quit_binding(mock_api_client):
 @pytest.mark.asyncio
 async def test_server_unreachable_shows_empty_tree(mock_api_client):
     """When server is unreachable, tree should have headers but no children."""
-    mock_api_client.fetch_templates.side_effect = requests_lib.exceptions.ConnectionError("Connection refused")
-    mock_api_client.fetch_running_pipelines.side_effect = requests_lib.exceptions.ConnectionError("Connection refused")
-    mock_api_client.fetch_recent_pipelines.side_effect = requests_lib.exceptions.ConnectionError("Connection refused")
+    mock_api_client.fetch_templates.side_effect = (
+        requests_lib.exceptions.ConnectionError("Connection refused")
+    )
+    mock_api_client.fetch_running_pipelines.side_effect = (
+        requests_lib.exceptions.ConnectionError("Connection refused")
+    )
+    mock_api_client.fetch_recent_pipelines.side_effect = (
+        requests_lib.exceptions.ConnectionError("Connection refused")
+    )
 
     app = ClowderClientApp(api_client=mock_api_client)
     async with app.run_test() as pilot:

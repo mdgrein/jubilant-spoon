@@ -7,12 +7,10 @@ No browser automation is needed; the contract is what matters.
 
 Mirrors the pattern in test_api.py (temp DB, TestClient, no orchestration loop).
 """
+
 import json
-import tempfile
-import os
 import uuid
 import pytest
-from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -21,25 +19,20 @@ from server.main import app
 
 # ─── fixtures (same pattern as test_api.py) ───────────────────────────────────
 
+
 @pytest.fixture(autouse=True)
 def setup_test_db():
-    """Use a fresh temporary database for each test."""
-    tmpdir = tempfile.mkdtemp()
-    test_db_path = os.path.join(tmpdir, "test_webui.db")
-
+    """Use a fresh in-memory database for each test."""
     import server.main as srv
+
     original_db = srv.db
     original_tm = srv.template_manager
     original_ps = srv.pipeline_service
 
-    srv.db = type(original_db)(test_db_path)
+    srv.db = type(original_db)(":memory:")
+    srv.db.init_pipeline_schema()
     srv.template_manager = type(original_tm)(srv.db)
     srv.pipeline_service = type(original_ps)(srv.db, srv.template_manager)
-
-    schema_path = Path(__file__).parent.parent / "agents" / "schema_pipelines.sql"
-    if schema_path.exists():
-        srv.db.conn.executescript(schema_path.read_text())
-        srv.db.conn.commit()
 
     yield srv.db
 
@@ -47,12 +40,6 @@ def setup_test_db():
     srv.db = original_db
     srv.template_manager = original_tm
     srv.pipeline_service = original_ps
-
-    try:
-        os.remove(test_db_path)
-        os.rmdir(tmpdir)
-    except Exception:
-        pass
 
 
 @pytest.fixture
@@ -70,20 +57,32 @@ def client_follow(setup_test_db):
 
 # ─── seed helpers ─────────────────────────────────────────────────────────────
 
-def _seed_template(db, template_id="template-mock", name="Mock Pipeline",
-                   description="A mock pipeline for testing"):
+
+def _seed_template(
+    db,
+    template_id="template-mock",
+    name="Mock Pipeline",
+    description="A mock pipeline for testing",
+):
     """Insert a minimal pipeline template into the DB."""
     ts = db._timestamp()
-    db.conn.execute("""
+    db.conn.execute(
+        """
         INSERT INTO pipeline_templates (template_id, name, description, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?)
-    """, (template_id, name, description, ts, ts))
+    """,
+        (template_id, name, description, ts, ts),
+    )
     db.conn.commit()
 
 
-def _seed_pipeline_with_job(db, pipeline_id="pipe-1",
-                             status="completed", job_status="completed",
-                             job_output="line one\nline two"):
+def _seed_pipeline_with_job(
+    db,
+    pipeline_id="pipe-1",
+    status="completed",
+    job_status="completed",
+    job_output="line one\nline two",
+):
     """
     Seed a pipeline + one stage + one job directly into the DB.
     Returns the job_id.
@@ -101,35 +100,70 @@ def _seed_pipeline_with_job(db, pipeline_id="pipe-1",
     job_id = str(uuid.uuid4())
     stage_id = str(uuid.uuid4())
 
-    db.conn.execute("""
+    db.conn.execute(
+        """
         INSERT INTO pipelines
             (pipeline_id, template_id, original_prompt, status, created_at, updated_at, completed_at)
         VALUES (?, NULL, ?, ?, ?, ?, ?)
-    """, (pipeline_id, "test prompt", status, ts, ts,
-          ts if status in ("completed", "failed", "cancelled") else None))
+    """,
+        (
+            pipeline_id,
+            "test prompt",
+            status,
+            ts,
+            ts,
+            ts if status in ("completed", "failed", "cancelled") else None,
+        ),
+    )
 
-    db.conn.execute("""
+    db.conn.execute(
+        """
         INSERT INTO stages (stage_id, pipeline_id, name, stage_order, status, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
-    """, (stage_id, pipeline_id, "build", 1,
-          "completed" if job_status == "completed" else "running", ts))
+    """,
+        (
+            stage_id,
+            pipeline_id,
+            "build",
+            1,
+            "completed" if job_status == "completed" else "running",
+            ts,
+        ),
+    )
 
-    db.conn.execute("""
+    db.conn.execute(
+        """
         INSERT INTO jobs
             (job_id, pipeline_id, stage_id, agent_type, prompt,
              max_iterations, timeout_seconds, allowed_paths,
              status, retry_count, max_retries, job_output,
              created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (job_id, pipeline_id, stage_id, "mock", "test prompt",
-          50, 300, json.dumps(["D:/workspace"]),
-          job_status, 0, 3, job_output, ts, ts))
+    """,
+        (
+            job_id,
+            pipeline_id,
+            stage_id,
+            "mock",
+            "test prompt",
+            50,
+            300,
+            json.dumps(["D:/workspace"]),
+            job_status,
+            0,
+            3,
+            job_output,
+            ts,
+            ts,
+        ),
+    )
 
     db.conn.commit()
     return job_id
 
 
 # ─── static file serving ──────────────────────────────────────────────────────
+
 
 class TestStaticServing:
     def test_ui_redirects_to_static_index(self, client):
@@ -155,8 +189,15 @@ class TestStaticServing:
         """HTML should contain key DOM element IDs the JS references."""
         r = client_follow.get("/static/index.html")
         body = r.text
-        for el_id in ("sidebar", "tpl-list", "running-list", "recent-list",
-                       "detail-panel", "log-output", "start-dialog"):
+        for el_id in (
+            "sidebar",
+            "tpl-list",
+            "running-list",
+            "recent-list",
+            "detail-panel",
+            "log-output",
+            "start-dialog",
+        ):
             assert el_id in body, f"Missing element id: {el_id}"
 
     def test_index_references_api_endpoints(self, client_follow):
@@ -172,13 +213,14 @@ class TestStaticServing:
 
 # ─── /pipelines/templates contract ───────────────────────────────────────────
 
+
 class TestTemplatesContract:
     """
-    JS expects: GET /pipelines/templates → string[]
+    JS expects: GET /pipelines/templates → { template_id, name, description, category }[]
 
     JavaScript:
-        state.templates = templates;   // string[]
-        state.templates.map(t => { const data = { id: t }; ... })
+        state.templates = templates;   // list of dicts
+        state.templates.map(t => { const data = { id: t.template_id, name: t.name }; ... })
     """
 
     def test_returns_list(self, client):
@@ -186,18 +228,22 @@ class TestTemplatesContract:
         assert r.status_code == 200
         assert isinstance(r.json(), list)
 
-    def test_items_are_strings(self, client, setup_test_db):
+    def test_items_are_dicts_with_required_keys(self, client, setup_test_db):
         _seed_template(setup_test_db, "template-mock")
         r = client.get("/pipelines/templates")
         items = r.json()
         assert len(items) > 0
         for item in items:
-            assert isinstance(item, str), f"Expected string, got {type(item)}: {item}"
+            assert isinstance(item, dict), f"Expected dict, got {type(item)}: {item}"
+            assert "template_id" in item
+            assert "name" in item
+            assert "category" in item
 
-    def test_returns_template_id_string(self, client, setup_test_db):
+    def test_returns_template_id_in_dict(self, client, setup_test_db):
         _seed_template(setup_test_db, "template-mock")
         r = client.get("/pipelines/templates")
-        assert "template-mock" in r.json()
+        ids = [t["template_id"] for t in r.json()]
+        assert "template-mock" in ids
 
     def test_empty_when_no_templates(self, client):
         r = client.get("/pipelines/templates")
@@ -205,6 +251,7 @@ class TestTemplatesContract:
 
 
 # ─── /pipelines/running contract ─────────────────────────────────────────────
+
 
 class TestRunningPipelinesContract:
     """
@@ -233,7 +280,7 @@ class TestRunningPipelinesContract:
         pipelines = r.json()
         assert len(pipelines) > 0
         p = pipelines[0]
-        assert "id" in p,          "Pipeline must have 'id' (JS uses p.id)"
+        assert "id" in p, "Pipeline must have 'id' (JS uses p.id)"
         assert "pipeline_id" not in p, "JS does not use 'pipeline_id'"
 
     def test_pipeline_has_required_fields(self, client, setup_test_db):
@@ -262,14 +309,14 @@ class TestRunningPipelinesContract:
         _seed_pipeline_with_job(setup_test_db, status="running", job_status="running")
         r = client.get("/pipelines/running")
         job = r.json()[0]["stages"][0]["jobs"][0]
-        assert "id" in job,        "Job must have 'id' (JS uses j.id)"
+        assert "id" in job, "Job must have 'id' (JS uses j.id)"
         assert "job_id" not in job, "JS does not use 'job_id'"
 
     def test_job_has_retries_not_retry_count(self, client, setup_test_db):
         _seed_pipeline_with_job(setup_test_db, status="running", job_status="running")
         r = client.get("/pipelines/running")
         job = r.json()[0]["stages"][0]["jobs"][0]
-        assert "retries" in job,       "Job must have 'retries' (JS uses j.retries)"
+        assert "retries" in job, "Job must have 'retries' (JS uses j.retries)"
         assert "retry_count" not in job, "JS does not use 'retry_count'"
 
     def test_job_has_required_fields(self, client, setup_test_db):
@@ -294,6 +341,7 @@ class TestRunningPipelinesContract:
 
 # ─── /pipelines/recent contract ──────────────────────────────────────────────
 
+
 class TestRecentPipelinesContract:
     """Same shape as /pipelines/running, plus completed_at."""
 
@@ -303,7 +351,9 @@ class TestRecentPipelinesContract:
         assert isinstance(r.json(), list)
 
     def test_pipeline_has_id(self, client, setup_test_db):
-        _seed_pipeline_with_job(setup_test_db, status="completed", job_status="completed")
+        _seed_pipeline_with_job(
+            setup_test_db, status="completed", job_status="completed"
+        )
         r = client.get("/pipelines/recent")
         pipelines = r.json()
         assert len(pipelines) > 0
@@ -311,7 +361,9 @@ class TestRecentPipelinesContract:
         assert "pipeline_id" not in pipelines[0]
 
     def test_job_has_id_and_retries(self, client, setup_test_db):
-        _seed_pipeline_with_job(setup_test_db, status="completed", job_status="completed")
+        _seed_pipeline_with_job(
+            setup_test_db, status="completed", job_status="completed"
+        )
         r = client.get("/pipelines/recent")
         job = r.json()[0]["stages"][0]["jobs"][0]
         assert "id" in job
@@ -321,21 +373,28 @@ class TestRecentPipelinesContract:
 
     def test_limit_param(self, client, setup_test_db):
         for i in range(5):
-            _seed_pipeline_with_job(setup_test_db, pipeline_id=f"pipe-{i}",
-                                    status="completed", job_status="completed")
+            _seed_pipeline_with_job(
+                setup_test_db,
+                pipeline_id=f"pipe-{i}",
+                status="completed",
+                job_status="completed",
+            )
         r = client.get("/pipelines/recent?limit=3")
         assert r.status_code == 200
         assert len(r.json()) <= 3
 
     def test_completed_at_present(self, client, setup_test_db):
         """Recent pipelines must include completed_at for display."""
-        _seed_pipeline_with_job(setup_test_db, status="completed", job_status="completed")
+        _seed_pipeline_with_job(
+            setup_test_db, status="completed", job_status="completed"
+        )
         r = client.get("/pipelines/recent")
         p = r.json()[0]
         assert "completed_at" in p
 
 
 # ─── /pipelines/jobs/{id}/log/since contract ─────────────────────────────────
+
 
 class TestLogSinceContract:
     """
@@ -350,13 +409,15 @@ class TestLogSinceContract:
     """
 
     def test_returns_correct_shape(self, client, setup_test_db):
-        job_id = _seed_pipeline_with_job(setup_test_db, job_output="line1\nline2\nline3")
+        job_id = _seed_pipeline_with_job(
+            setup_test_db, job_output="line1\nline2\nline3"
+        )
         r = client.get(f"/pipelines/jobs/{job_id}/log/since?line=0")
         assert r.status_code == 200
         data = r.json()
         assert "lines" in data, "Response must have 'lines'"
         assert "total" in data, "Response must have 'total'"
-        assert "live"  in data, "Response must have 'live'"
+        assert "live" in data, "Response must have 'live'"
 
     def test_lines_is_list_of_strings(self, client, setup_test_db):
         job_id = _seed_pipeline_with_job(setup_test_db, job_output="line1\nline2")
@@ -404,6 +465,7 @@ class TestLogSinceContract:
 
 # ─── /pipelines/jobs/{id}/log/full contract ──────────────────────────────────
 
+
 class TestLogFullContract:
     """
     JS expects: GET /pipelines/jobs/{id}/log/full → plain text
@@ -420,7 +482,9 @@ class TestLogFullContract:
         assert "text/plain" in r.headers.get("content-type", "")
 
     def test_content_is_raw_log(self, client, setup_test_db):
-        job_id = _seed_pipeline_with_job(setup_test_db, job_output="line1\nline2\nline3")
+        job_id = _seed_pipeline_with_job(
+            setup_test_db, job_output="line1\nline2\nline3"
+        )
         r = client.get(f"/pipelines/jobs/{job_id}/log/full")
         assert r.text == "line1\nline2\nline3"
 
@@ -435,36 +499,235 @@ class TestLogFullContract:
         assert r.status_code == 404
 
 
-# ─── /pipelines/{template_id}/start contract ─────────────────────────────────
+# ─── /pipelines/templates/{id}/as-spec contract ──────────────────────────────
 
-class TestStartPipelineContract:
+
+class TestAsSpecContract:
     """
-    JS sends: POST /pipelines/{template_id}/start
-      body: { prompt: string, workspace_path: string }
+    JS calls GET /pipelines/templates/{id}/as-spec to expand a template before
+    posting to /pipelines/run.
 
     JS code (submitStartPipeline):
-        await api(`/pipelines/${_startTemplateId}/start`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt, workspace_path: workspace }),
-        });
+        const spec = await api(`/pipelines/templates/${_startTemplateId}/as-spec`);
+        await api('/pipelines/run', { ..., stages: spec.stages, dependencies: spec.dependencies });
     """
 
+    def _seed_named_template(self, db):
+        ts = db._timestamp()
+        tid = "tpl-as-spec"
+        sid = "stage-as-spec-1"
+        jid = "job-as-spec-1"
+        db.conn.execute(
+            "INSERT INTO pipeline_templates (template_id, name, description, default_vendor, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (tid, "As-Spec Test", "", "anthropic", ts, ts),
+        )
+        db.conn.execute(
+            "INSERT INTO template_stages (template_stage_id, template_id, name, stage_order) VALUES (?, ?, ?, ?)",
+            (sid, tid, "build", 1),
+        )
+        db.conn.execute(
+            """INSERT INTO template_jobs
+               (template_job_id, template_stage_id, agent_type, name, chain_id,
+                prompt_template, max_iterations, timeout_seconds, vendor)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)""",
+            (jid, sid, "dev", "builder", "build-chain", "{{original_prompt}}", 15, 300),
+        )
+        db.conn.commit()
+        return tid, jid
+
+    @pytest.mark.webui_contract
+    def test_returns_200_with_stages_and_dependencies(self, client, setup_test_db):
+        tid, _ = self._seed_named_template(setup_test_db)
+        r = client.get(f"/pipelines/templates/{tid}/as-spec")
+        assert r.status_code == 200
+        data = r.json()
+        assert "stages" in data
+        assert "dependencies" in data
+
+    @pytest.mark.webui_contract
     def test_404_for_unknown_template(self, client):
-        r = client.post("/pipelines/nonexistent-template/start",
-                        json={"prompt": "test", "workspace_path": "D:/workspace"})
+        r = client.get("/pipelines/templates/nonexistent/as-spec")
         assert r.status_code == 404
 
-    def test_requires_prompt_field(self, client, setup_test_db):
-        _seed_template(setup_test_db, "template-mock")
-        r = client.post("/pipelines/template-mock/start",
-                        json={"workspace_path": "D:/workspace"})
-        assert r.status_code == 422
+    @pytest.mark.webui_contract
+    def test_job_has_required_spec_fields(self, client, setup_test_db):
+        tid, jid = self._seed_named_template(setup_test_db)
+        r = client.get(f"/pipelines/templates/{tid}/as-spec")
+        job = r.json()["stages"][0]["jobs"][0]
+        for field in (
+            "ref",
+            "agent_type",
+            "name",
+            "chain_id",
+            "vendor",
+            "prompt_template",
+        ):
+            assert field in job, f"Job spec missing field: '{field}'"
 
-    def test_requires_workspace_path_field(self, client, setup_test_db):
-        _seed_template(setup_test_db, "template-mock")
-        # workspace_path has a default so this may succeed — just check no crash
-        r = client.post("/pipelines/template-mock/start",
-                        json={"prompt": "test"})
-        # 200 or 404 (no stages in template) are both valid; 5xx is not
-        assert r.status_code < 500
+    @pytest.mark.webui_contract
+    def test_job_ref_is_template_job_id(self, client, setup_test_db):
+        tid, jid = self._seed_named_template(setup_test_db)
+        r = client.get(f"/pipelines/templates/{tid}/as-spec")
+        job = r.json()["stages"][0]["jobs"][0]
+        assert job["ref"] == jid
+
+    @pytest.mark.webui_contract
+    def test_template_default_vendor_applied_to_null_job_vendor(
+        self, client, setup_test_db
+    ):
+        """Jobs with no explicit vendor inherit the template's default_vendor."""
+        tid, _ = self._seed_named_template(setup_test_db)
+        r = client.get(f"/pipelines/templates/{tid}/as-spec")
+        job = r.json()["stages"][0]["jobs"][0]
+        assert job["vendor"] == "anthropic"
+
+    @pytest.mark.webui_contract
+    def test_as_spec_then_run_creates_pipeline(self, client, setup_test_db):
+        """Full two-step flow: GET as-spec → POST /pipelines/run → pipeline exists."""
+        tid, _ = self._seed_named_template(setup_test_db)
+        spec = client.get(f"/pipelines/templates/{tid}/as-spec").json()
+        r = client.post(
+            "/pipelines/run",
+            json={
+                "prompt": "do the thing",
+                "workspace_path": "D:/workspace",
+                "stages": spec["stages"],
+                "dependencies": spec["dependencies"],
+            },
+        )
+        assert r.status_code == 200
+        assert "pipeline_id" in r.json()
+
+
+# ─── /pipelines/run contract ─────────────────────────────────────────────────
+
+
+class TestRunPipelineContract:
+    """
+    CONTRACT: static/index.html submitBuildPipeline() sends POST /pipelines/run
+    with name and chain_id per job. The server must accept and preserve them.
+
+    If you change these tests, you MUST update BOTH sides (JS and server) or
+    the UI will break.
+    """
+
+    _spec = {
+        "prompt": "build fibonacci",
+        "workspace_path": "D:/workspace",
+        "stages": [
+            {
+                "name": "build",
+                "stage_order": 1,
+                "jobs": [
+                    {
+                        "ref": "fib-dev",
+                        "agent_type": "dev",
+                        "name": "fibonacci tester",
+                        "chain_id": "fibonacci",
+                        "vendor": "local-ollama",
+                        "prompt_template": "{{original_prompt}}",
+                    }
+                ],
+            }
+        ],
+        "dependencies": [],
+    }
+
+    @pytest.mark.webui_contract
+    def test_job_name_and_chain_id_accepted(self, client):
+        """CONTRACT: submitBuildPipeline() sends `name` and `chain_id` per job
+        → server must accept them in JobSpec."""
+        r = client.post("/pipelines/run", json=self._spec)
+        assert r.status_code == 200
+        assert "pipeline_id" in r.json()
+
+    @pytest.mark.webui_contract
+    def test_job_name_preserved_in_running_response(self, client):
+        """CONTRACT: name/chain_id sent via Build Pipeline must appear in
+        GET /pipelines/running so renderJobsForStage can group them."""
+        r = client.post("/pipelines/run", json=self._spec)
+        assert r.status_code == 200
+
+        r2 = client.get("/pipelines/running")
+        pipelines = r2.json()
+        assert len(pipelines) > 0
+        job = pipelines[0]["stages"][0]["jobs"][0]
+        assert job["name"] == "fibonacci tester"
+        assert job["chain_id"] == "fibonacci"
+
+    @pytest.mark.webui_contract
+    def test_both_start_and_build_produce_name_in_jobs(self, client, setup_test_db):
+        """CONTRACT: Both the as-spec+run path and inline spec POST /pipelines/run
+        must produce jobs where name != agent_type (not falling back).
+        This is the convergence test — both paths go through /pipelines/run."""
+        # Seed a template with a named job
+        ts = setup_test_db._timestamp()
+        tid = "tpl-convergence"
+        sid = "stage-conv-1"
+        jid = "job-conv-1"
+        setup_test_db.conn.execute(
+            "INSERT INTO pipeline_templates (template_id, name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            (tid, "Convergence Test", "", ts, ts),
+        )
+        setup_test_db.conn.execute(
+            "INSERT INTO template_stages (template_stage_id, template_id, name, stage_order) VALUES (?, ?, ?, ?)",
+            (sid, tid, "build", 1),
+        )
+        setup_test_db.conn.execute(
+            """INSERT INTO template_jobs
+               (template_job_id, template_stage_id, agent_type, name, chain_id,
+                vendor, prompt_template, max_iterations, timeout_seconds)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                jid,
+                sid,
+                "dev",
+                "fibonacci tester",
+                "fibonacci",
+                "local-ollama",
+                "{{original_prompt}}",
+                15,
+                300,
+            ),
+        )
+        setup_test_db.conn.commit()
+
+        # Start via template (as-spec + run — the new Start Pipeline path)
+        spec = client.get(f"/pipelines/templates/{tid}/as-spec").json()
+        r1 = client.post(
+            "/pipelines/run",
+            json={
+                "prompt": "build fib",
+                "workspace_path": "D:/workspace",
+                "stages": spec["stages"],
+                "dependencies": spec["dependencies"],
+            },
+        )
+        assert r1.status_code == 200
+        pid1 = r1.json()["pipeline_id"]
+
+        # Start via inline spec (Build Pipeline path)
+        r2 = client.post("/pipelines/run", json=self._spec)
+        assert r2.status_code == 200
+        pid2 = r2.json()["pipeline_id"]
+
+        running = client.get("/pipelines/running").json()
+        by_id = {p["id"]: p for p in running}
+
+        for pid in (pid1, pid2):
+            assert pid in by_id, f"Pipeline {pid} not in running"
+            job = by_id[pid]["stages"][0]["jobs"][0]
+            assert job["name"] == "fibonacci tester", (
+                f"Pipeline {pid}: expected name 'fibonacci tester', got '{job['name']}'"
+            )
+
+    @pytest.mark.webui_contract
+    def test_running_jobs_have_chain_id_and_depends_on(self, client, setup_test_db):
+        """CONTRACT: GET /pipelines/running job objects must include chain_id
+        and depends_on so the JS can group and render dependencies."""
+        r = client.post("/pipelines/run", json=self._spec)
+        assert r.status_code == 200
+        running = client.get("/pipelines/running").json()
+        job = running[0]["stages"][0]["jobs"][0]
+        assert "chain_id" in job, "Job must have 'chain_id'"
+        assert "depends_on" in job, "Job must have 'depends_on'"

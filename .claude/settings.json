@@ -1,5 +1,28 @@
 {
   "enabledPlugins": {
     "frontend-design@claude-plugins-official": true
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/pre_edit_reminder.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/stop_run_tests.py"
+          }
+        ]
+      }
+    ]
   }
 }

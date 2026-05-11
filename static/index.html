@@ -55,6 +55,9 @@
     .sb-template { padding: 4px 16px 4px 24px; cursor: pointer; color: var(--text);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-left: 2px solid transparent; }
 
+    .sb-chain-header { padding: 3px 16px 3px 48px; color: var(--muted); font-weight: bold;
+      font-size: 0.85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
     .sb-pipeline:hover, .sb-stage:hover, .sb-job:hover, .sb-template:hover { background: #222; }
 
     .sb-active { background: #1e2d3d !important; border-left-color: var(--accent) !important;
@@ -132,10 +135,16 @@
 <body>
 <div id="app">
   <div id="sidebar">
-    <div id="sidebar-title">CLOWDER</div>
+    <div id="sidebar-title" style="display:flex;align-items:center;justify-content:space-between">
+      <span>CLOWDER</span>
+      <button id="pause-btn" title="Pause auto-refresh" onclick="toggleRefresh()"
+              style="font-size:10px;padding:2px 7px;letter-spacing:0">⏸ pause</button>
+    </div>
     <div id="sidebar-scroll">
-      <div class="section-header">▼ Templates</div>
+      <div class="section-header">▼ Templates (<span id="tpl-count">0</span>) <button style="font-size:10px;padding:1px 6px;float:right;margin-top:-1px" onclick="openNewTemplateDialog()">+</button></div>
       <div id="tpl-list"></div>
+      <div class="section-header" style="margin-top:8px">▼ Schedules (<span id="schedules-count">0</span>) <button style="font-size:10px;padding:1px 6px;float:right;margin-top:-1px" onclick="openScheduleDialog()">+</button></div>
+      <div id="schedules-list"></div>
       <div class="section-header" style="margin-top:8px">▼ Running (<span id="running-count">0</span>)</div>
       <div id="running-list"></div>
       <div class="section-header" style="margin-top:8px">▼ Recent (<span id="recent-count">0</span>)</div>
@@ -197,13 +206,83 @@
   </div>
 </dialog>
 
+<dialog id="schedule-dialog">
+  <h2>CREATE SCHEDULE</h2>
+  <label>Name</label>
+  <input id="sched-name" type="text" placeholder="Nightly build">
+  <label>Template</label>
+  <select id="sched-template"></select>
+  <label>Cron Expression <span style="color:var(--muted);font-weight:normal">(5-field, e.g. "0 2 * * *")</span></label>
+  <input id="sched-cron" type="text" placeholder="0 2 * * *">
+  <label>Prompt</label>
+  <textarea id="sched-prompt" rows="3" placeholder="Task description..."></textarea>
+  <label>Workspace Path</label>
+  <input id="sched-workspace" type="text" value="D:/workspace">
+  <label style="display:flex;align-items:center;gap:6px;margin-top:12px">
+    <input id="sched-enabled" type="checkbox" checked style="width:auto">
+    <span>Enabled</span>
+  </label>
+  <div id="dialog-actions">
+    <button onclick="closeScheduleDialog()">Cancel</button>
+    <button class="primary" onclick="submitCreateSchedule()">Create</button>
+  </div>
+</dialog>
+
+<dialog id="new-template-dialog">
+  <h2>NEW TEMPLATE</h2>
+  <label>Name</label>
+  <input id="ntpl-name" type="text" placeholder="My Template">
+  <label>Description</label>
+  <input id="ntpl-description" type="text" placeholder="What this template does">
+  <label>Category</label>
+  <input id="ntpl-category" type="text" placeholder="development, testing, analysis…">
+  <label>Template ID <span style="color:var(--muted);font-weight:normal">(leave blank to auto-generate)</span></label>
+  <input id="ntpl-id" type="text" placeholder="my-template-id">
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+    <button onclick="closeNewTemplateDialog()">Cancel</button>
+    <button class="primary" onclick="submitNewTemplate()">Create</button>
+  </div>
+</dialog>
+
+<dialog id="edit-template-dialog">
+  <h2>EDIT TEMPLATE</h2>
+  <input id="etpl-id" type="hidden">
+  <label>Name</label>
+  <input id="etpl-name" type="text">
+  <label>Description</label>
+  <input id="etpl-description" type="text">
+  <label>Category</label>
+  <input id="etpl-category" type="text" placeholder="development, testing, analysis…">
+  <label>Default Vendor</label>
+  <input id="etpl-vendor" type="text" placeholder="local-ollama, anthropic…">
+  <label>Default Model</label>
+  <input id="etpl-model" type="text" placeholder="qwen3:8b, claude-sonnet-4-6…">
+  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+    <button onclick="closeEditTemplateDialog()">Cancel</button>
+    <button class="primary" onclick="submitEditTemplate()">Save</button>
+  </div>
+</dialog>
+
+<dialog id="edit-structure-dialog" style="width:740px;max-width:95vw;padding:0">
+  <div style="padding:14px 18px 10px;border-bottom:1px solid var(--border);flex-shrink:0">
+    <h2>EDIT STRUCTURE</h2>
+    <p id="ess-title" style="color:var(--muted);font-size:12px;margin-top:4px"></p>
+  </div>
+  <div id="ess-body" style="max-height:65vh;overflow-y:auto;padding:14px 18px"></div>
+  <div style="padding:10px 18px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end">
+    <button onclick="closeEssDialog()">Cancel</button>
+    <button class="primary" onclick="submitEssStructure()">Save Structure</button>
+  </div>
+</dialog>
+
 <script>
 // ─── state ────────────────────────────────────────────────────────────────────
 const state = {
-  templates: [],        // array of strings
+  templates: [],        // array of dicts
+  schedules: [],        // array of schedule objects
   running: [],          // array of pipeline objects
   recent: [],           // array of pipeline objects
-  selected: null,       // { type: 'template'|'pipeline'|'stage'|'job', data }
+  selected: null,       // { type: 'template'|'schedule'|'pipeline'|'stage'|'job', data }
   logJobId: null,
   logOffset: 0,
   logTimer: null,
@@ -212,7 +291,8 @@ const state = {
 };
 
 // ─── API shape notes ──────────────────────────────────────────────────────────
-// GET /pipelines/templates  → string[]
+// GET /pipelines/templates  → { template_id, name, description, category }[]
+// GET /schedules            → { schedule_id, name, cron_expr, enabled, last_fired_at, next_fire_at, template_name }[]
 // GET /pipelines/running    → { id, name, description, status, stages: [{ name, jobs: [{ id, name, status, prompt, log, retries }] }] }[]
 // GET /pipelines/recent     → same shape
 // GET /pipelines/jobs/{id}/log/since?line=N → { lines: string[], total: int, live: bool }
@@ -261,7 +341,12 @@ function fmtLabel(ts) {
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 async function api(path, opts) {
+  opts = opts || {};
+  if (opts.body && !opts.headers) {
+    opts.headers = { 'Content-Type': 'application/json' };
+  }
   const res = await fetch(path, opts);
+  if (res.status === 204) return null;
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
@@ -289,12 +374,14 @@ function findNextRunningJob(excludeId = null) {
 // ─── data fetching ────────────────────────────────────────────────────────────
 async function fetchAll() {
   try {
-    const [templates, running, recent] = await Promise.all([
+    const [templates, schedules, running, recent] = await Promise.all([
       api('/pipelines/templates'),
+      api('/schedules'),
       api('/pipelines/running'),
       api('/pipelines/recent?limit=10'),
     ]);
-    state.templates = templates;  // string[]
+    state.templates = templates;  // list of dicts
+    state.schedules = schedules;
     state.running   = running;
     state.recent    = recent;
     renderSidebar();
@@ -359,21 +446,55 @@ async function fetchAll() {
 // ─── sidebar rendering ────────────────────────────────────────────────────────
 function renderSidebar() {
   renderTemplates();
+  renderSchedules();
   renderRunning();
   renderRecent();
 }
 
 function renderTemplates() {
+  document.getElementById('tpl-count').textContent = state.templates.length;
   const el = document.getElementById('tpl-list');
   if (!state.templates.length) {
     el.innerHTML = '<div class="sb-template empty-state">No templates</div>';
     return;
   }
-  el.innerHTML = state.templates.map(t => {
-    // t is a plain string (template ID)
-    const active = isSelected('template', t) ? 'sb-active' : '';
-    const data = { id: t };
-    return `<div class="sb-template ${active}" onclick="selectItem('template', ${safeJson(data)})">${escHtml(t)}</div>`;
+  // Group by category
+  const groups = {};
+  for (const t of state.templates) {
+    const cat = t.category || '';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(t);
+  }
+  let html = '';
+  const sortedCats = Object.keys(groups).sort((a, b) => {
+    if (a === '') return 1;  // uncategorized last
+    if (b === '') return -1;
+    return a.localeCompare(b);
+  });
+  for (const cat of sortedCats) {
+    if (cat) {
+      html += `<div style="padding:4px 16px 2px 16px;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:1px">${escHtml(cat)}</div>`;
+    }
+    for (const t of groups[cat]) {
+      const active = isSelected('template', t.template_id) ? 'sb-active' : '';
+      const data = { id: t.template_id, name: t.name };
+      html += `<div class="sb-template ${active}" onclick="selectItem('template', ${safeJson(data)})">${escHtml(t.name || t.template_id)}</div>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+function renderSchedules() {
+  document.getElementById('schedules-count').textContent = state.schedules.length;
+  const el = document.getElementById('schedules-list');
+  if (!state.schedules.length) {
+    el.innerHTML = '<div class="sb-template empty-state">No schedules</div>';
+    return;
+  }
+  el.innerHTML = state.schedules.map(s => {
+    const active = isSelected('schedule', s.schedule_id) ? 'sb-active' : '';
+    const enabledDot = s.enabled ? '<span style="color:var(--ok)">●</span> ' : '<span style="color:var(--muted)">○</span> ';
+    return `<div class="sb-template ${active}" onclick="selectItem('schedule', ${safeJson(s)})">${enabledDot}${escHtml(s.name)}</div>`;
   }).join('');
 }
 
@@ -467,10 +588,57 @@ function renderJobNode(job, allJobs, depth) {
   return html;
 }
 
+function _topoSortChain(chainJobs) {
+  const ids = new Set(chainJobs.map(j => j.id));
+  // Only consider deps within this chain
+  const inChainDeps = new Map(chainJobs.map(j => [j.id, (j.depends_on || []).filter(d => ids.has(d))]));
+  const result = [];
+  const visited = new Set();
+  // Start with roots (no in-chain deps)
+  const queue = chainJobs.filter(j => inChainDeps.get(j.id).length === 0);
+  while (queue.length > 0) {
+    const job = queue.shift();
+    if (visited.has(job.id)) continue;
+    visited.add(job.id);
+    result.push(job);
+    for (const other of chainJobs) {
+      if (visited.has(other.id)) continue;
+      if (inChainDeps.get(other.id).every(d => visited.has(d))) queue.push(other);
+    }
+  }
+  // Cycle protection: append any unvisited jobs
+  for (const job of chainJobs) { if (!visited.has(job.id)) result.push(job); }
+  return result;
+}
+
 function renderJobsForStage(stageJobs) {
   const stageJobIds = new Set(stageJobs.map(j => j.id));
-  const roots = stageJobs.filter(j => !j.parent_job_id || !stageJobIds.has(j.parent_job_id));
-  return roots.map(r => renderJobNode(r, stageJobs, 0)).join('');
+  // Multiplier children (parent_job_id points to a job in this stage) are rendered by renderJobNode
+  const topLevel = stageJobs.filter(j => !j.parent_job_id || !stageJobIds.has(j.parent_job_id));
+
+  // Group top-level jobs by chain_id
+  const chains = new Map();   // chain_id -> [job]
+  const standalone = [];
+  for (const job of topLevel) {
+    if (job.chain_id) {
+      if (!chains.has(job.chain_id)) chains.set(job.chain_id, []);
+      chains.get(job.chain_id).push(job);
+    } else {
+      standalone.push(job);
+    }
+  }
+
+  let html = '';
+  for (const [chainId, chainJobs] of chains) {
+    html += `<div class="sb-chain-header">◆ ${escHtml(chainId)}</div>`;
+    for (const job of _topoSortChain(chainJobs)) {
+      html += renderJobNode(job, stageJobs, 1);
+    }
+  }
+  // Standalone jobs (no chain): render with dep-order at depth 0
+  const standaloneRoots = standalone.filter(j => !(j.depends_on || []).some(d => standalone.some(s => s.id === d)));
+  html += _topoSortChain(standalone).map(r => renderJobNode(r, stageJobs, 0)).join('');
+  return html;
 }
 
 function aggregateStatus(statuses) {
@@ -488,6 +656,7 @@ function isSelected(type, id) {
   if (state.selected.type !== type) return false;
   const d = state.selected.data;
   if (type === 'template') return d.id === id;
+  if (type === 'schedule') return d.schedule_id === id;
   if (type === 'pipeline') return d.id === id;
   if (type === 'stage')    return (d.pipeline_id + ':' + d.name) === id;
   if (type === 'job')      return d.id === id;
@@ -527,19 +696,46 @@ function renderDetail(type, data) {
   const body   = document.getElementById('detail-body');
   const acts   = document.getElementById('detail-actions');
 
-  if (type === 'template') {
-    // data = { id: 'template-mock', name?, description?, stages? }
-    title.textContent = data.id;
-    body.innerHTML = rows([['Template ID', data.id]]) +
+  if (type === 'schedule') {
+    title.textContent = 'Schedule: ' + escHtml(data.name);
+    const enabledLabel = data.enabled ? 'Yes' : 'No';
+    const fields = [
+      ['Name',      data.name],
+      ['Template',  data.template_name || data.template_id],
+      ['Cron',      data.cron_expr],
+      ['Enabled',   enabledLabel],
+      ['Last fired', data.last_fired_at ? fmtTime(data.last_fired_at) : '—'],
+      ['Next fire',  data.next_fire_at  ? fmtTime(data.next_fire_at)  : '—'],
+    ];
+    body.innerHTML = rows(fields);
+    const toggleBtn = data.enabled
+      ? `<button onclick="disableSchedule('${data.schedule_id}')">Disable</button>`
+      : `<button class="primary" onclick="enableSchedule('${data.schedule_id}')">Enable</button>`;
+    acts.innerHTML =
+      toggleBtn +
+      `<button onclick="viewScheduleInstances('${data.schedule_id}')">View Instances</button>` +
+      `<button class="danger" onclick="deleteSchedule('${data.schedule_id}')">Delete</button>`;
+
+  } else if (type === 'template') {
+    // data = { id, name?, description?, category? }
+    title.textContent = data.name || data.id;
+    body.innerHTML = rows([['Template ID', data.id, '', data.id]]) +
       '<span style="color:var(--muted);font-size:11px">loading details…</span>';
     acts.innerHTML =
       `<button class="primary" onclick="openStartDialog(${safeJson(data)})">Start Pipeline</button>` +
-      `<button onclick="openBuildDialog(${safeJson(data)})">Build Pipeline</button>`;
+      `<button onclick="openBuildDialog(${safeJson(data)})">Build Pipeline</button>` +
+      `<button onclick="openEssDialog(${safeJson(data)})">Edit Structure</button>` +
+      `<button onclick="openEditTemplateDialog(${safeJson(data)})">Edit Metadata</button>` +
+      `<button class="danger" onclick="deleteTemplate('${data.id}')">Delete</button>`;
     // Fetch full template details asynchronously
     api(`/pipelines/templates/${data.id}`).then(tpl => {
       if (!state.selected || state.selected.data.id !== data.id) return; // navigated away
-      const fields = [['Template ID', tpl.id]];
+      const fields = [['Template ID', tpl.id, '', tpl.id]];
+      if (tpl.name) fields.push(['Name', tpl.name]);
       if (tpl.description) fields.push(['Description', tpl.description]);
+      const listTpl = state.templates.find(t => t.template_id === tpl.id);
+      const category = listTpl && listTpl.category;
+      fields.push(['Category', category || '—']);
       const stageNames = (tpl.stages || []).map(s => s.name).join(' → ');
       if (stageNames) fields.push(['Stages', stageNames]);
       const jobCount = (tpl.stages || []).reduce((n, s) => n + (s.jobs || []).length, 0);
@@ -547,7 +743,7 @@ function renderDetail(type, data) {
       body.innerHTML = rows(fields);
     }).catch(() => {
       if (state.selected && state.selected.data.id === data.id)
-        body.innerHTML = rows([['Template ID', data.id]]);
+        body.innerHTML = rows([['Template ID', data.id, '', data.id]]);
     });
 
   } else if (type === 'pipeline') {
@@ -563,9 +759,13 @@ function renderDetail(type, data) {
     if (data.updated_at)   fields.push(['Updated',   fmtTime(data.updated_at)]);
     if (data.completed_at) fields.push(['Completed', fmtTime(data.completed_at)]);
     body.innerHTML = rows(fields);
-    acts.innerHTML = data.status === 'running'
+    const stopBtn = data.status === 'running'
       ? `<button class="danger" onclick="stopPipeline('${data.id}')">Stop Pipeline</button>`
       : '';
+    const deleteBtn = data.status !== 'running'
+      ? `<button class="danger" onclick="deletePipeline('${data.id}')">Delete</button>`
+      : '';
+    acts.innerHTML = stopBtn + deleteBtn;
 
   } else if (type === 'stage') {
     // data = { name, pipeline_id, jobs: [{ id, name, status, retries }] }
@@ -736,6 +936,20 @@ async function stopPipeline(pipelineId) {
   }
 }
 
+async function deletePipeline(pipelineId) {
+  if (!confirm('Permanently delete pipeline ' + shortId(pipelineId) + '?\n\nThis cannot be undone.')) return;
+  try {
+    await api(`/pipelines/${pipelineId}`, { method: 'DELETE' });
+    state.selected = null;
+    document.getElementById('detail-title').textContent = 'Clowder';
+    document.getElementById('detail-body').innerHTML = '<span class="empty-state">Select an item from the sidebar.</span>';
+    document.getElementById('detail-actions').innerHTML = '';
+    await fetchAll();
+  } catch (e) {
+    alert('Delete failed: ' + e.message);
+  }
+}
+
 // ─── retry dialog ─────────────────────────────────────────────────────────────
 let _retryJobId   = null;
 let _retryOriginalPrompt = null;
@@ -795,10 +1009,12 @@ async function submitStartPipeline() {
   const workspace = document.getElementById('dialog-workspace').value.trim();
   if (!prompt) { document.getElementById('dialog-prompt').focus(); return; }
   try {
-    await api(`/pipelines/${_startTemplateId}/start`, {
+    const spec = await api(`/pipelines/templates/${_startTemplateId}/as-spec`);
+    await api('/pipelines/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, workspace_path: workspace }),
+      body: JSON.stringify({ prompt, workspace_path: workspace,
+                             stages: spec.stages, dependencies: spec.dependencies }),
     });
     closeStartDialog();
     await fetchAll();
@@ -847,6 +1063,7 @@ const MODELS = {
     { value: 'qwen3:8b',      label: 'qwen3:8b' },
     { value: 'qwen3:14b',     label: 'qwen3:14b' },
     { value: 'qwen3:32b',     label: 'qwen3:32b' },
+    { value: 'qwen3.5:9b',     label: 'qwen3.5:9b' },
     { value: 'deepseek-r1:8b',  label: 'deepseek-r1:8b' },
     { value: 'deepseek-r1:14b', label: 'deepseek-r1:14b' },
     { value: 'llama3.2:3b',   label: 'llama3.2:3b' },
@@ -864,7 +1081,6 @@ const MODELS = {
     { value: 'qwen3-14b',   label: 'Qwen3 14B' },
   ],
   'mock': [
-    { value: 'mock-agent', label: 'mock_agent.py (standalone)' },
     { value: 'mock-model', label: 'mock_model.py (LLM stub)' },
   ],
 };
@@ -894,7 +1110,47 @@ function renderBuildJobs(stages) {
     return;
   }
   container.innerHTML = stages.map((stage, si) => {
-    const cards = (stage.jobs || []).map((job, ji) => {
+    // Separate chain-grouped jobs from standalone jobs
+    const chains = {};   // chain_id -> [{job, ji}]
+    const ungrouped = []; // [{job, ji}]
+    (stage.jobs || []).forEach((job, ji) => {
+      if (job.chain_id) {
+        if (!chains[job.chain_id]) chains[job.chain_id] = [];
+        chains[job.chain_id].push({job, ji});
+      } else {
+        ungrouped.push({job, ji});
+      }
+    });
+
+    // Render one card per chain
+    const chainCards = Object.entries(chains).map(([chainId, entries]) => {
+      const p = `bc-${si}-${chainId}`;
+      const refJob = (entries.find(e => e.job.agent_type === 'dev') || entries[0]).job;
+      const vendor = refJob.vendor || 'local-ollama';
+      const badges = entries.map(e =>
+        `<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:#1e2a1e;color:#7ec87e;margin-right:4px">${escHtml(e.job.agent_type)}</span>`
+      ).join('');
+      return `
+        <div style="background:#111;border:1px solid var(--border);border-radius:4px;padding:12px;margin-bottom:8px">
+          <div style="color:var(--accent);font-size:11px;margin-bottom:6px;font-weight:600">chain: ${escHtml(chainId)}</div>
+          <div style="margin-bottom:8px">${badges}</div>
+          <label>Vendor</label>
+          <select id="${p}-vendor" onchange="onVendorChange(this, document.getElementById('${p}-model'))">
+            ${vendorOptions(vendor)}
+          </select>
+          <label>Model</label>
+          <select id="${p}-model">
+            ${modelOptions(vendor, refJob.model || '')}
+          </select>
+          <label>Prompt Template</label>
+          <textarea id="${p}-prompt" rows="3">${escHtml(refJob.prompt_template || '{{original_prompt}}')}</textarea>
+          <label>Max Iterations</label>
+          <input id="${p}-maxiter" type="number" value="${escHtml(String(refJob.max_iterations ?? 15))}">
+        </div>`;
+    });
+
+    // Render standalone jobs as before (preserving original ji for submitBuildPipeline)
+    const standaloneCards = ungrouped.map(({job, ji}) => {
       const p = `bj-${si}-${ji}`;
       const vendor = job.vendor || 'local-ollama';
       return `
@@ -913,7 +1169,9 @@ function renderBuildJobs(stages) {
           <label>Max Iterations</label>
           <input id="${p}-maxiter" type="number" value="${escHtml(String(job.max_iterations ?? 15))}">
         </div>`;
-    }).join('');
+    });
+
+    const cards = [...chainCards, ...standaloneCards].join('');
     return `
       <div style="margin-bottom:16px">
         <div style="color:var(--head);font-size:11px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">${escHtml(stage.name)}</div>
@@ -936,38 +1194,34 @@ async function submitBuildPipeline() {
     name: stage.name,
     stage_order: si,
     jobs: (stage.jobs || []).map((job, ji) => {
-      const p = `bj-${si}-${ji}`;
+      // Chain jobs share one card; standalone jobs each have their own
+      const p = job.chain_id ? `bc-${si}-${job.chain_id}` : `bj-${si}-${ji}`;
       const vendor = document.getElementById(`${p}-vendor`).value.trim() || job.vendor;
       const model  = document.getElementById(`${p}-model`).value.trim() || null;
-      let command_template = null;
-      if (vendor === 'mock') {
-        if (model === 'mock-model') {
-          command_template = 'python -u agents/mock_model.py';
-        } else {
-          command_template = 'python -u agents/mock_agent.py --agent-type {{agent_type}} --duration 2.0';
-        }
-      }
       return {
-        ref:              job.agent_type,
+        ref:              job.id,
         agent_type:       job.agent_type,
-        vendor:           command_template ? 'mock' : vendor,
-        model:            command_template ? null : model,
+        name:             job.name || '',
+        chain_id:         job.chain_id || null,
+        vendor,
+        model,
         prompt_template:  document.getElementById(`${p}-prompt`).value.trim() || job.prompt_template,
         max_iterations:   parseInt(document.getElementById(`${p}-maxiter`).value, 10) || job.max_iterations,
         timeout_seconds:  job.timeout_seconds,
         artifact_strategy: job.artifact_strategy ? JSON.parse(job.artifact_strategy) : null,
         retry_strategy:    job.retry_strategy    ? JSON.parse(job.retry_strategy)    : null,
-        command_template,
+        command_template: job.command_template || null,
       };
     }),
   }));
 
   // Derive dependencies from the template job dependency list
+  // dep.depends_on is the prerequisite's template_job_id; job.id is the dependent's template_job_id
   const deps = [];
   (tpl.stages || []).forEach(stage => {
     (stage.jobs || []).forEach(job => {
       (job.dependencies || []).forEach(dep => {
-        deps.push({ from_ref: dep.depends_on, to_ref: job.agent_type, type: dep.type });
+        deps.push({ from_ref: dep.depends_on, to_ref: job.id, type: dep.type });
       });
     });
   });
@@ -999,6 +1253,505 @@ function escHtml(str) {
 function safeJson(obj) {
   return JSON.stringify(obj)
     .replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ─── schedule actions ─────────────────────────────────────────────────────────
+function openScheduleDialog() {
+  // Populate template dropdown
+  const sel = document.getElementById('sched-template');
+  sel.innerHTML = state.templates.map(t =>
+    `<option value="${escHtml(t.template_id)}">${escHtml(t.name || t.template_id)}</option>`
+  ).join('');
+  document.getElementById('sched-name').value = '';
+  document.getElementById('sched-cron').value = '';
+  document.getElementById('sched-prompt').value = '';
+  document.getElementById('sched-workspace').value = 'D:/workspace';
+  document.getElementById('sched-enabled').checked = true;
+  document.getElementById('schedule-dialog').showModal();
+  document.getElementById('sched-name').focus();
+}
+
+function closeScheduleDialog() {
+  document.getElementById('schedule-dialog').close();
+}
+
+async function submitCreateSchedule() {
+  const name      = document.getElementById('sched-name').value.trim();
+  const templateId = document.getElementById('sched-template').value;
+  const cronExpr  = document.getElementById('sched-cron').value.trim();
+  const prompt    = document.getElementById('sched-prompt').value.trim();
+  const workspace = document.getElementById('sched-workspace').value.trim();
+  const enabled   = document.getElementById('sched-enabled').checked;
+  if (!name || !cronExpr || !prompt) return;
+  try {
+    await api('/schedules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template_id: templateId, name, cron_expr: cronExpr,
+                             prompt, workspace_path: workspace, enabled }),
+    });
+    closeScheduleDialog();
+    await fetchAll();
+  } catch (e) {
+    alert('Create schedule failed: ' + e.message);
+  }
+}
+
+async function enableSchedule(scheduleId) {
+  try {
+    const updated = await api(`/schedules/${scheduleId}/enable`, { method: 'POST' });
+    await fetchAll();
+    selectItem('schedule', updated);
+  } catch (e) { alert('Enable failed: ' + e.message); }
+}
+
+async function disableSchedule(scheduleId) {
+  try {
+    const updated = await api(`/schedules/${scheduleId}/disable`, { method: 'POST' });
+    await fetchAll();
+    selectItem('schedule', updated);
+  } catch (e) { alert('Disable failed: ' + e.message); }
+}
+
+async function deleteSchedule(scheduleId) {
+  if (!confirm('Delete schedule ' + scheduleId.slice(0, 8) + '?')) return;
+  try {
+    await api(`/schedules/${scheduleId}`, { method: 'DELETE' });
+    state.selected = null;
+    document.getElementById('detail-title').textContent = 'Select an item';
+    document.getElementById('detail-body').innerHTML = '';
+    document.getElementById('detail-actions').innerHTML = '';
+    await fetchAll();
+  } catch (e) { alert('Delete failed: ' + e.message); }
+}
+
+async function viewScheduleInstances(scheduleId) {
+  try {
+    const pipelines = await api(`/schedules/${scheduleId}/pipelines`);
+    const title  = document.getElementById('detail-title');
+    const body   = document.getElementById('detail-body');
+    const acts   = document.getElementById('detail-actions');
+    title.textContent = 'Schedule Instances';
+    if (!pipelines.length) {
+      body.innerHTML = '<span class="empty-state">No pipeline instances yet.</span>';
+    } else {
+      body.innerHTML = pipelines.map(p =>
+        `<div class="detail-row">
+          <span class="${statusClass(p.status)}">${statusIcon(p.status)}</span>
+          <span class="detail-value">&nbsp;${escHtml(shortId(p.pipeline_id))} — ${escHtml(p.status)} — ${fmtTime(p.created_at)}</span>
+        </div>`
+      ).join('');
+    }
+    acts.innerHTML = '';
+  } catch (e) { alert('Load instances failed: ' + e.message); }
+}
+
+document.getElementById('schedule-dialog').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeScheduleDialog();
+});
+
+// ─── template CRUD actions ────────────────────────────────────────────────────
+function openNewTemplateDialog() {
+  document.getElementById('ntpl-name').value = '';
+  document.getElementById('ntpl-description').value = '';
+  document.getElementById('ntpl-category').value = '';
+  document.getElementById('ntpl-id').value = '';
+  document.getElementById('new-template-dialog').showModal();
+  document.getElementById('ntpl-name').focus();
+}
+function closeNewTemplateDialog() {
+  document.getElementById('new-template-dialog').close();
+}
+async function submitNewTemplate() {
+  const name = document.getElementById('ntpl-name').value.trim();
+  if (!name) { alert('Name is required'); return; }
+  const spec = {
+    name,
+    description: document.getElementById('ntpl-description').value.trim(),
+    category: document.getElementById('ntpl-category').value.trim() || null,
+    stages: [],
+    dependencies: [],
+  };
+  const tid = document.getElementById('ntpl-id').value.trim();
+  if (tid) spec.template_id = tid;
+  try {
+    await api('/pipelines/templates', { method: 'POST', body: JSON.stringify(spec) });
+    closeNewTemplateDialog();
+    await fetchAll();
+  } catch (e) { alert('Create failed: ' + e.message); }
+}
+
+function openEditTemplateDialog(data) {
+  document.getElementById('etpl-id').value = data.id;
+  document.getElementById('etpl-name').value = data.name || '';
+  document.getElementById('etpl-description').value = '';
+  document.getElementById('etpl-category').value = '';
+  document.getElementById('etpl-vendor').value = '';
+  document.getElementById('etpl-model').value = '';
+  // Fetch current values to pre-fill
+  api(`/pipelines/templates/${data.id}`).then(tpl => {
+    document.getElementById('etpl-description').value = tpl.description || '';
+    const listTpl = state.templates.find(t => t.template_id === data.id);
+    if (listTpl) document.getElementById('etpl-category').value = listTpl.category || '';
+  }).catch(() => {});
+  document.getElementById('edit-template-dialog').showModal();
+  document.getElementById('etpl-name').focus();
+}
+function closeEditTemplateDialog() {
+  document.getElementById('edit-template-dialog').close();
+}
+async function submitEditTemplate() {
+  const tid = document.getElementById('etpl-id').value;
+  const updates = {};
+  const name = document.getElementById('etpl-name').value.trim();
+  if (name) updates.name = name;
+  const description = document.getElementById('etpl-description').value.trim();
+  if (description !== '') updates.description = description;
+  const category = document.getElementById('etpl-category').value.trim();
+  if (category !== '') updates.category = category;
+  const vendor = document.getElementById('etpl-vendor').value.trim();
+  if (vendor) updates.default_vendor = vendor;
+  const model = document.getElementById('etpl-model').value.trim();
+  if (model) updates.default_model = model;
+  try {
+    await api(`/pipelines/templates/${tid}`, { method: 'PATCH', body: JSON.stringify(updates) });
+    closeEditTemplateDialog();
+    await fetchAll();
+  } catch (e) { alert('Update failed: ' + e.message); }
+}
+
+async function deleteTemplate(templateId) {
+  if (!confirm(`Delete template "${templateId}"? This cannot be undone.`)) return;
+  try {
+    await api(`/pipelines/templates/${templateId}`, { method: 'DELETE' });
+    state.selected = null;
+    document.getElementById('detail-title').textContent = 'Select an item';
+    document.getElementById('detail-body').innerHTML = '';
+    document.getElementById('detail-actions').innerHTML = '';
+    await fetchAll();
+  } catch (e) { alert('Delete failed: ' + e.message); }
+}
+
+document.getElementById('new-template-dialog').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeNewTemplateDialog();
+});
+document.getElementById('edit-template-dialog').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeEditTemplateDialog();
+});
+
+// ─── edit structure dialog ─────────────────────────────────────────────────────
+let _ess = null;  // { templateId, stages: [...], deps: [...] }
+function _essId() { return Math.random().toString(36).slice(2, 10); }
+
+function openEssDialog(data) {
+  _ess = { templateId: data.id, stages: [], deps: [] };
+  document.getElementById('ess-title').textContent = data.name || data.id;
+  document.getElementById('ess-body').innerHTML =
+    '<span style="color:var(--muted);font-style:italic">Loading…</span>';
+  document.getElementById('edit-structure-dialog').showModal();
+  api(`/pipelines/templates/${data.id}`).then(tpl => {
+    _ess.stages = (tpl.stages || []).map(s => ({
+      _id: s.id || _essId(),
+      stage_id: s.id,
+      name: s.name,
+      jobs: (s.jobs || []).map(j => ({
+        _id: j.id,
+        template_job_id: j.id,
+        name: j.name || '',
+        agent_type: j.agent_type || 'dev',
+        vendor: j.vendor || 'local-ollama',
+        model: j.model || '',
+        prompt_template: j.prompt_template || '{{original_prompt}}',
+        max_iterations: j.max_iterations || 50,
+        timeout_seconds: j.timeout_seconds || 300,
+      })),
+    }));
+    _ess.deps = [];
+    (tpl.stages || []).forEach(s => {
+      (s.jobs || []).forEach(j => {
+        (j.dependencies || []).forEach(dep => {
+          _ess.deps.push({ _id: _essId(), from_id: dep.depends_on, to_id: j.id, type: dep.type || 'success' });
+        });
+      });
+    });
+    renderEss();
+  }).catch(e => {
+    document.getElementById('ess-body').innerHTML =
+      `<span style="color:var(--fail)">Error: ${escHtml(e.message)}</span>`;
+  });
+}
+
+function closeEssDialog() {
+  document.getElementById('edit-structure-dialog').close();
+}
+
+// Capture current DOM input values back into _ess state before any re-render
+function captureEss() {
+  if (!_ess) return;
+  _ess.stages.forEach(stage => {
+    const sn = document.getElementById(`ess-s-${stage._id}-name`);
+    if (sn) stage.name = sn.value;
+    stage.jobs.forEach(job => {
+      const p = `ess-j-${job._id}`;
+      [['type', 'agent_type'], ['name', 'name'], ['vendor', 'vendor'], ['model', 'model'], ['prompt', 'prompt_template'], ['cmd', 'command_template']].forEach(([sfx, fld]) => {
+        const el = document.getElementById(`${p}-${sfx}`);
+        if (el) job[fld] = el.value;
+      });
+      const mi = document.getElementById(`${p}-maxiter`);
+      if (mi) job.max_iterations = parseInt(mi.value) || 50;
+    });
+  });
+}
+
+function essAddStage() {
+  captureEss();
+  _ess.stages.push({ _id: _essId(), stage_id: null, name: 'New Stage', jobs: [] });
+  renderEss();
+}
+function essMoveStage(id, dir) {
+  captureEss();
+  const i = _ess.stages.findIndex(s => s._id === id);
+  const j = i + dir;
+  if (j < 0 || j >= _ess.stages.length) return;
+  [_ess.stages[i], _ess.stages[j]] = [_ess.stages[j], _ess.stages[i]];
+  renderEss();
+}
+function essRemoveStage(id) {
+  captureEss();
+  const s = _ess.stages.find(s => s._id === id);
+  const gone = new Set(s ? s.jobs.map(j => j._id) : []);
+  _ess.stages = _ess.stages.filter(s => s._id !== id);
+  _ess.deps = _ess.deps.filter(d => !gone.has(d.from_id) && !gone.has(d.to_id));
+  renderEss();
+}
+function essAddJob(stageId) {
+  captureEss();
+  const s = _ess.stages.find(s => s._id === stageId);
+  if (!s) return;
+  s.jobs.push({ _id: _essId(), template_job_id: null, name: '', agent_type: 'dev',
+    vendor: 'local-ollama', model: '', prompt_template: '{{original_prompt}}',
+    max_iterations: 50, timeout_seconds: 300 });
+  renderEss();
+}
+function essMoveJob(stageId, jobId, dir) {
+  captureEss();
+  const s = _ess.stages.find(s => s._id === stageId);
+  if (!s) return;
+  const i = s.jobs.findIndex(j => j._id === jobId);
+  const k = i + dir;
+  if (k < 0 || k >= s.jobs.length) return;
+  [s.jobs[i], s.jobs[k]] = [s.jobs[k], s.jobs[i]];
+  renderEss();
+}
+function essRemoveJob(stageId, jobId) {
+  captureEss();
+  const s = _ess.stages.find(s => s._id === stageId);
+  if (s) s.jobs = s.jobs.filter(j => j._id !== jobId);
+  _ess.deps = _ess.deps.filter(d => d.from_id !== jobId && d.to_id !== jobId);
+  renderEss();
+}
+function essAddDep() {
+  captureEss();
+  const from = document.getElementById('ess-dep-from').value;
+  const to   = document.getElementById('ess-dep-to').value;
+  const type = document.getElementById('ess-dep-type').value;
+  if (!from || !to || from === to) return;
+  _ess.deps.push({ _id: _essId(), from_id: from, to_id: to, type });
+  renderEss();
+}
+function essRemoveDep(id) {
+  captureEss();
+  _ess.deps = _ess.deps.filter(d => d._id !== id);
+  renderEss();
+}
+
+const AGENT_TYPES = ['dev', 'tester', 'verifier', 'planner', 'mock', 'command'];
+
+function renderEss() {
+  const body = document.getElementById('ess-body');
+  let html = `<button onclick="essAddStage()" style="margin-bottom:12px">+ Add Stage</button>`;
+
+  _ess.stages.forEach((stage, si) => {
+    const first = si === 0, last = si === _ess.stages.length - 1;
+    html += `
+      <div style="border:1px solid var(--border);border-radius:4px;margin-bottom:10px">
+        <div style="background:#151515;padding:7px 10px;display:flex;gap:6px;align-items:center;border-radius:4px 4px 0 0">
+          <span style="color:var(--head);font-size:10px;text-transform:uppercase;letter-spacing:1px;min-width:38px">Stage</span>
+          <input id="ess-s-${stage._id}-name" value="${escHtml(stage.name)}"
+                 style="flex:1;background:transparent;border:none;border-bottom:1px solid #444;color:var(--text);padding:1px 4px;font-family:inherit;font-size:13px">
+          <button onclick="essMoveStage('${stage._id}',-1)"${first ? ' disabled' : ''} style="padding:1px 6px">↑</button>
+          <button onclick="essMoveStage('${stage._id}',1)"${last ? ' disabled' : ''} style="padding:1px 6px">↓</button>
+          <button class="danger" onclick="essRemoveStage('${stage._id}')" style="padding:1px 6px">×</button>
+        </div>
+        <div style="padding:8px 10px">`;
+
+    stage.jobs.forEach((job, ji) => {
+      const fj = ji === 0, lj = ji === stage.jobs.length - 1;
+      const p = `ess-j-${job._id}`;
+      const v = job.vendor || 'local-ollama';
+      html += `
+          <div style="background:#0d0d0d;border:1px solid #2a2a2a;border-radius:3px;padding:8px;margin-bottom:6px">
+            <div style="display:flex;gap:5px;align-items:center;margin-bottom:8px">
+              <button onclick="essMoveJob('${stage._id}','${job._id}',-1)"${fj ? ' disabled' : ''} style="padding:1px 5px;font-size:11px">↑</button>
+              <button onclick="essMoveJob('${stage._id}','${job._id}',1)"${lj ? ' disabled' : ''} style="padding:1px 5px;font-size:11px">↓</button>
+              <select id="${p}-type" style="background:#111;color:var(--accent);border:1px solid var(--border);padding:2px 5px;font-size:11px;border-radius:2px;font-family:inherit">
+                ${AGENT_TYPES.map(t => `<option${job.agent_type === t ? ' selected' : ''}>${t}</option>`).join('')}
+              </select>
+              <input id="${p}-name" value="${escHtml(job.name)}" placeholder="display name (optional)"
+                     style="flex:1;background:#111;color:var(--text);border:1px solid var(--border);padding:3px 7px;font-size:12px;border-radius:2px;font-family:inherit">
+              <button class="danger" onclick="essRemoveJob('${stage._id}','${job._id}')" style="padding:1px 6px;font-size:11px" title="Remove job">×</button>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
+              <div>
+                <div style="color:var(--muted);font-size:10px;margin-bottom:3px">VENDOR</div>
+                <select id="${p}-vendor" onchange="onVendorChange(this,document.getElementById('${p}-model'))"
+                        style="width:100%;background:#111;color:var(--text);border:1px solid var(--border);padding:3px 6px;font-size:12px;border-radius:2px;font-family:inherit">
+                  ${vendorOptions(v)}
+                </select>
+              </div>
+              <div>
+                <div style="color:var(--muted);font-size:10px;margin-bottom:3px">MODEL</div>
+                <select id="${p}-model"
+                        style="width:100%;background:#111;color:var(--text);border:1px solid var(--border);padding:3px 6px;font-size:12px;border-radius:2px;font-family:inherit">
+                  ${modelOptions(v, job.model || '')}
+                </select>
+              </div>
+            </div>
+            <div style="margin-bottom:6px">
+              <div style="color:var(--muted);font-size:10px;margin-bottom:3px">PROMPT TEMPLATE</div>
+              <textarea id="${p}-prompt" rows="2"
+                        style="width:100%;background:#111;color:var(--text);border:1px solid var(--border);padding:3px 7px;font-size:12px;border-radius:2px;font-family:inherit;resize:vertical">${escHtml(job.prompt_template)}</textarea>
+            </div>
+            <div style="margin-bottom:6px">
+              <div style="color:var(--muted);font-size:10px;margin-bottom:3px">COMMAND TEMPLATE <span style="color:#555;font-weight:normal;text-transform:none;letter-spacing:0">— vars: {{job_id}} {{agent_type}} {{workspace_path}} {{original_prompt}} {{prompt}}</span></div>
+              <textarea id="${p}-cmd" rows="2"
+                        style="width:100%;background:#111;color:var(--text);border:1px solid var(--border);padding:3px 7px;font-size:12px;border-radius:2px;font-family:inherit;resize:vertical">${escHtml(job.command_template || '')}</textarea>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="color:var(--muted);font-size:10px">MAX ITER</div>
+              <input id="${p}-maxiter" type="number" value="${job.max_iterations}"
+                     style="width:70px;background:#111;color:var(--text);border:1px solid var(--border);padding:2px 6px;font-size:12px;border-radius:2px;font-family:inherit">
+            </div>
+          </div>`;
+    });
+
+    html += `
+          <button onclick="essAddJob('${stage._id}')" style="font-size:11px;padding:2px 9px;margin-top:2px">+ Add Job</button>
+        </div>
+      </div>`;
+  });
+
+  // Dependencies section
+  const allJobs = _ess.stages.flatMap(s =>
+    s.jobs.map(j => ({ _id: j._id, label: (j.name || j.agent_type) + ' [' + s.name + ']' }))
+  );
+  const jobOpts = allJobs.map(j =>
+    `<option value="${j._id}">${escHtml(j.label)}</option>`
+  ).join('');
+
+  html += `
+    <div style="border:1px solid var(--border);border-radius:4px;padding:10px;margin-top:4px">
+      <div style="color:var(--head);font-size:10px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Dependencies</div>`;
+
+  if (_ess.deps.length) {
+    _ess.deps.forEach(dep => {
+      const f = allJobs.find(j => j._id === dep.from_id);
+      const t = allJobs.find(j => j._id === dep.to_id);
+      html += `
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:12px">
+        <span>${escHtml(f ? f.label : dep.from_id.slice(0,6) + '…')}</span>
+        <span style="color:var(--muted)">→</span>
+        <span>${escHtml(t ? t.label : dep.to_id.slice(0,6) + '…')}</span>
+        <span style="color:var(--head)">(${escHtml(dep.type)})</span>
+        <button onclick="essRemoveDep('${dep._id}')" style="padding:1px 5px;font-size:11px">×</button>
+      </div>`;
+    });
+    html += '<div style="height:6px"></div>';
+  }
+
+  if (!allJobs.length) {
+    html += `<span style="color:var(--muted);font-size:12px;font-style:italic">Add jobs first to define dependencies.</span>`;
+  } else {
+    html += `
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <select id="ess-dep-from" style="background:#111;color:var(--text);border:1px solid var(--border);padding:3px 6px;font-size:12px;border-radius:2px;font-family:inherit">
+          <option value="">prereq (runs first)…</option>${jobOpts}
+        </select>
+        <span style="color:var(--muted)">→</span>
+        <select id="ess-dep-to" style="background:#111;color:var(--text);border:1px solid var(--border);padding:3px 6px;font-size:12px;border-radius:2px;font-family:inherit">
+          <option value="">dependent (runs after)…</option>${jobOpts}
+        </select>
+        <select id="ess-dep-type" style="background:#111;color:var(--text);border:1px solid var(--border);padding:3px 6px;font-size:12px;border-radius:2px;font-family:inherit">
+          <option value="success">success</option>
+          <option value="failure">failure</option>
+          <option value="completed">completed</option>
+          <option value="always">always</option>
+        </select>
+        <button onclick="essAddDep()" style="padding:3px 9px;font-size:12px">+ Add</button>
+      </div>`;
+  }
+  html += `</div>`;
+  body.innerHTML = html;
+}
+
+async function submitEssStructure() {
+  captureEss();
+  const stages = _ess.stages.map((stage, si) => ({
+    template_stage_id: stage.stage_id || undefined,
+    name: stage.name,
+    stage_order: si,
+    jobs: stage.jobs.map(job => ({
+      ref: job._id,
+      template_job_id: job.template_job_id || undefined,
+      agent_type: job.agent_type,
+      name: job.name || job.agent_type,
+      prompt_template: job.prompt_template,
+      command_template: job.command_template || null,
+      vendor: job.vendor || undefined,
+      model: job.model || undefined,
+      max_iterations: job.max_iterations,
+      timeout_seconds: job.timeout_seconds,
+    })),
+  }));
+  // from_id = prerequisite (runs first), to_id = dependent (waits)
+  // _insert_stages_jobs_deps expects from_ref = dependent, to_ref = prerequisite — swap here
+  const dependencies = _ess.deps.map(d => ({ from_ref: d.to_id, to_ref: d.from_id, type: d.type }));
+  const tid = _ess.templateId;
+  try {
+    await api(`/pipelines/templates/${tid}/structure`, {
+      method: 'PATCH',
+      body: JSON.stringify({ stages, dependencies }),
+    });
+    closeEssDialog();
+    await fetchAll();
+    const tpl = state.templates.find(t => t.template_id === tid);
+    if (tpl) selectItem('template', { id: tpl.template_id, name: tpl.name });
+  } catch (e) {
+    alert('Save failed: ' + e.message);
+  }
+}
+
+document.getElementById('edit-structure-dialog').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeEssDialog();
+});
+
+// ─── refresh control ──────────────────────────────────────────────────────────
+function toggleRefresh() {
+  const btn = document.getElementById('pause-btn');
+  if (state.refreshTimer) {
+    clearInterval(state.refreshTimer);
+    state.refreshTimer = null;
+    btn.textContent = '▶ resume';
+    btn.style.color = 'var(--run)';
+    btn.style.borderColor = 'var(--run)';
+    btn.title = 'Resume auto-refresh';
+  } else {
+    state.refreshTimer = setInterval(fetchAll, 2000);
+    btn.textContent = '⏸ pause';
+    btn.style.color = '';
+    btn.style.borderColor = '';
+    btn.title = 'Pause auto-refresh';
+  }
 }
 
 // ─── init ─────────────────────────────────────────────────────────────────────

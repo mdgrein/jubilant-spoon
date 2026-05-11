@@ -4,7 +4,6 @@ Handles all network communication, separated from UI logic.
 """
 
 import requests
-from typing import Optional
 
 
 class ClowderAPIClient:
@@ -32,8 +31,7 @@ class ClowderAPIClient:
             requests.exceptions.RequestException: On network error
         """
         response = requests.get(
-            f"{self.base_url}/pipelines/templates",
-            timeout=self.timeout
+            f"{self.base_url}/pipelines/templates", timeout=self.timeout
         )
         response.raise_for_status()
         return response.json()
@@ -53,13 +51,14 @@ class ClowderAPIClient:
             requests.exceptions.HTTPError: If template not found (404)
         """
         response = requests.get(
-            f"{self.base_url}/pipelines/templates/{template_id}",
-            timeout=self.timeout
+            f"{self.base_url}/pipelines/templates/{template_id}", timeout=self.timeout
         )
         response.raise_for_status()
         return response.json()
 
-    def start_pipeline(self, template_id: str, prompt: str, workspace_path: str) -> dict:
+    def start_pipeline(
+        self, template_id: str, prompt: str, workspace_path: str
+    ) -> dict:
         """
         Start a new pipeline.
 
@@ -78,7 +77,7 @@ class ClowderAPIClient:
         response = requests.post(
             f"{self.base_url}/pipelines/{template_id}/start",
             json={"prompt": prompt, "workspace_path": workspace_path},
-            timeout=self.timeout
+            timeout=self.timeout,
         )
         response.raise_for_status()
         return response.json()
@@ -97,8 +96,7 @@ class ClowderAPIClient:
             requests.exceptions.RequestException: On network error
         """
         response = requests.post(
-            f"{self.base_url}/pipelines/{pipeline_id}/stop",
-            timeout=self.timeout
+            f"{self.base_url}/pipelines/{pipeline_id}/stop", timeout=self.timeout
         )
         response.raise_for_status()
         return response.json()
@@ -114,8 +112,7 @@ class ClowderAPIClient:
             requests.exceptions.RequestException: On network error
         """
         response = requests.get(
-            f"{self.base_url}/pipelines/running",
-            timeout=self.timeout
+            f"{self.base_url}/pipelines/running", timeout=self.timeout
         )
         response.raise_for_status()
         return response.json()
@@ -136,7 +133,7 @@ class ClowderAPIClient:
         response = requests.get(
             f"{self.base_url}/pipelines/recent",
             params={"limit": limit},
-            timeout=self.timeout
+            timeout=self.timeout,
         )
         response.raise_for_status()
         return response.json()
@@ -151,9 +148,6 @@ class ClowderAPIClient:
         Raises:
             requests.exceptions.RequestException: On network error
         """
-        response = requests.get(
-            f"{self.base_url}/ping",
-            timeout=self.timeout
-        )
+        response = requests.get(f"{self.base_url}/ping", timeout=self.timeout)
         response.raise_for_status()
         return response.json().get("pong", False)

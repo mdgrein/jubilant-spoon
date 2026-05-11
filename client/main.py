@@ -1,7 +1,6 @@
 # DORMANT POC — TUI client, not actively maintained. Web UI takes priority.
 import asyncio
 import json
-import os
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +26,7 @@ def _list_workspace_dirs() -> list[tuple[str, str]]:
         if e.is_dir() and not e.name.startswith(".") and e.name != "__pycache__"
     )
 
+
 STATUS_ICONS = {
     "pending": "[ ]",
     "running": "[*]",
@@ -45,7 +45,7 @@ def _format_timestamp(iso_timestamp: str) -> str:
     if not iso_timestamp:
         return ""
     try:
-        dt = datetime.fromisoformat(iso_timestamp.replace('Z', '+00:00'))
+        dt = datetime.fromisoformat(iso_timestamp.replace("Z", "+00:00"))
         now = datetime.now(dt.tzinfo)
 
         # If same day, show time only
@@ -53,7 +53,7 @@ def _format_timestamp(iso_timestamp: str) -> str:
             return dt.strftime("%H:%M")
         # Otherwise show month-day and time
         return dt.strftime("%m-%d %H:%M")
-    except:
+    except Exception:
         return ""
 
 
@@ -175,7 +175,10 @@ class ClowderClientApp(App):
 
             def fetch_template(template_id):
                 try:
-                    return (template_id, self.api_client.fetch_template_details(template_id))
+                    return (
+                        template_id,
+                        self.api_client.fetch_template_details(template_id),
+                    )
                 except requests.exceptions.RequestException:
                     return (template_id, None)
 
@@ -223,7 +226,9 @@ class ClowderClientApp(App):
             return
         self._refreshing = True
         try:
-            templates, running_pipelines, recent_pipelines = await asyncio.to_thread(self._fetch_data)
+            templates, running_pipelines, recent_pipelines = await asyncio.to_thread(
+                self._fetch_data
+            )
             self._apply_refresh(templates, running_pipelines, recent_pipelines)
         finally:
             self._refreshing = False
@@ -250,7 +255,11 @@ class ClowderClientApp(App):
     def _apply_refresh(self, templates, running_pipelines, recent_pipelines) -> None:
         """Decide: no-op, in-place update, or full rebuild."""
         # Content snapshot — if nothing changed at all, no-op
-        snapshot = json.dumps({"t": templates, "r": running_pipelines, "rc": recent_pipelines}, sort_keys=True, default=str)
+        snapshot = json.dumps(
+            {"t": templates, "r": running_pipelines, "rc": recent_pipelines},
+            sort_keys=True,
+            default=str,
+        )
         if snapshot == self._last_snapshot:
             return
         self._last_snapshot = snapshot
@@ -289,23 +298,37 @@ class ClowderClientApp(App):
         for pl in running_pipelines:
             pl_icon = _status_icon(pl.get("status", "pending"))
             pl_node = running_node.add(f"{pl_icon} {pl['name']}", expand=True)
-            pl_node.data = {"type": "pipeline", "id": pl["id"], "name": pl["name"],
-                            "description": pl.get("description", ""), "status": pl.get("status", "")}
+            pl_node.data = {
+                "type": "pipeline",
+                "id": pl["id"],
+                "name": pl["name"],
+                "description": pl.get("description", ""),
+                "status": pl.get("status", ""),
+            }
             for stage in pl.get("stages", []):
                 stage_statuses = [j["status"] for j in stage.get("jobs", [])]
                 stage_icon = _status_icon(_aggregate_status(stage_statuses))
                 stage_node = pl_node.add(f"{stage_icon} {stage['name']}", expand=True)
-                stage_node.data = {"type": "stage", "pipeline_id": pl["id"],
-                                   "name": stage["name"], "jobs": stage.get("jobs", [])}
+                stage_node.data = {
+                    "type": "stage",
+                    "pipeline_id": pl["id"],
+                    "name": stage["name"],
+                    "jobs": stage.get("jobs", []),
+                }
                 for job in stage.get("jobs", []):
                     job_icon = _status_icon(job["status"])
                     retries = job.get("retries", 0)
                     retry_label = f" (retry #{retries})" if retries > 0 else ""
-                    job_leaf = stage_node.add_leaf(f"{job_icon} {job['name']}{retry_label}")
-                    job_leaf.data = {"type": "job", "name": job["name"],
-                                     "status": job["status"],
-                                     "log": job.get("log"),
-                                     "retries": retries}
+                    job_leaf = stage_node.add_leaf(
+                        f"{job_icon} {job['name']}{retry_label}"
+                    )
+                    job_leaf.data = {
+                        "type": "job",
+                        "name": job["name"],
+                        "status": job["status"],
+                        "log": job.get("log"),
+                        "retries": retries,
+                    }
 
         # --- Recent ---
         recent_node = tree.root.add("Recent", expand=False)
@@ -314,24 +337,40 @@ class ClowderClientApp(App):
             pl_icon = _status_icon(pl.get("status", "completed"))
             timestamp = _format_timestamp(pl.get("completed_at", ""))
             timestamp_prefix = f"[{timestamp}] " if timestamp else ""
-            pl_node = recent_node.add(f"{timestamp_prefix}{pl_icon} {pl['name']}", expand=False)
-            pl_node.data = {"type": "pipeline", "id": pl["id"], "name": pl["name"],
-                            "description": pl.get("description", ""), "status": pl.get("status", "")}
+            pl_node = recent_node.add(
+                f"{timestamp_prefix}{pl_icon} {pl['name']}", expand=False
+            )
+            pl_node.data = {
+                "type": "pipeline",
+                "id": pl["id"],
+                "name": pl["name"],
+                "description": pl.get("description", ""),
+                "status": pl.get("status", ""),
+            }
             for stage in pl.get("stages", []):
                 stage_statuses = [j["status"] for j in stage.get("jobs", [])]
                 stage_icon = _status_icon(_aggregate_status(stage_statuses))
                 stage_node = pl_node.add(f"{stage_icon} {stage['name']}", expand=False)
-                stage_node.data = {"type": "stage", "pipeline_id": pl["id"],
-                                   "name": stage["name"], "jobs": stage.get("jobs", [])}
+                stage_node.data = {
+                    "type": "stage",
+                    "pipeline_id": pl["id"],
+                    "name": stage["name"],
+                    "jobs": stage.get("jobs", []),
+                }
                 for job in stage.get("jobs", []):
                     job_icon = _status_icon(job["status"])
                     retries = job.get("retries", 0)
                     retry_label = f" (retry #{retries})" if retries > 0 else ""
-                    job_leaf = stage_node.add_leaf(f"{job_icon} {job['name']}{retry_label}")
-                    job_leaf.data = {"type": "job", "name": job["name"],
-                                     "status": job["status"],
-                                     "log": job.get("log"),
-                                     "retries": retries}
+                    job_leaf = stage_node.add_leaf(
+                        f"{job_icon} {job['name']}{retry_label}"
+                    )
+                    job_leaf.data = {
+                        "type": "job",
+                        "name": job["name"],
+                        "status": job["status"],
+                        "log": job.get("log"),
+                        "retries": retries,
+                    }
 
         tree.root.expand()
 
@@ -342,26 +381,39 @@ class ClowderClientApp(App):
                     tree.select_node(node)
                     break
 
-    def _update_tree_content(self, templates, running_pipelines, recent_pipelines) -> None:
+    def _update_tree_content(
+        self, templates, running_pipelines, recent_pipelines
+    ) -> None:
         """Walk existing nodes and update labels + data in place (no structural change)."""
         tree: Tree = self.query_one("#nav_tree", Tree)
         running_node = tree.root.children[1]  # Running header
-        recent_node = tree.root.children[2] if len(tree.root.children) > 2 else None  # Recent header
+        recent_node = (
+            tree.root.children[2] if len(tree.root.children) > 2 else None
+        )  # Recent header
 
         for pl_idx, pl in enumerate(running_pipelines):
             pl_node = running_node.children[pl_idx]
             pl_icon = _status_icon(pl.get("status", "pending"))
             pl_node.set_label(f"{pl_icon} {pl['name']}")
-            pl_node.data = {"type": "pipeline", "id": pl["id"], "name": pl["name"],
-                            "description": pl.get("description", ""), "status": pl.get("status", "")}
+            pl_node.data = {
+                "type": "pipeline",
+                "id": pl["id"],
+                "name": pl["name"],
+                "description": pl.get("description", ""),
+                "status": pl.get("status", ""),
+            }
 
             for stage_idx, stage in enumerate(pl.get("stages", [])):
                 stage_node = pl_node.children[stage_idx]
                 stage_statuses = [j["status"] for j in stage.get("jobs", [])]
                 stage_icon = _status_icon(_aggregate_status(stage_statuses))
                 stage_node.set_label(f"{stage_icon} {stage['name']}")
-                stage_node.data = {"type": "stage", "pipeline_id": pl["id"],
-                                   "name": stage["name"], "jobs": stage.get("jobs", [])}
+                stage_node.data = {
+                    "type": "stage",
+                    "pipeline_id": pl["id"],
+                    "name": stage["name"],
+                    "jobs": stage.get("jobs", []),
+                }
 
                 for job_idx, job in enumerate(stage.get("jobs", [])):
                     job_node = stage_node.children[job_idx]
@@ -369,10 +421,13 @@ class ClowderClientApp(App):
                     retries = job.get("retries", 0)
                     retry_label = f" (retry #{retries})" if retries > 0 else ""
                     job_node.set_label(f"{job_icon} {job['name']}{retry_label}")
-                    job_node.data = {"type": "job", "name": job["name"],
-                                     "status": job["status"],
-                                     "log": job.get("log"),
-                                     "retries": retries}
+                    job_node.data = {
+                        "type": "job",
+                        "name": job["name"],
+                        "status": job["status"],
+                        "log": job.get("log"),
+                        "retries": retries,
+                    }
 
         # Update recent pipelines
         if recent_node:
@@ -384,8 +439,13 @@ class ClowderClientApp(App):
                 timestamp = _format_timestamp(pl.get("completed_at", ""))
                 timestamp_prefix = f"[{timestamp}] " if timestamp else ""
                 pl_node.set_label(f"{timestamp_prefix}{pl_icon} {pl['name']}")
-                pl_node.data = {"type": "pipeline", "id": pl["id"], "name": pl["name"],
-                                "description": pl.get("description", ""), "status": pl.get("status", "")}
+                pl_node.data = {
+                    "type": "pipeline",
+                    "id": pl["id"],
+                    "name": pl["name"],
+                    "description": pl.get("description", ""),
+                    "status": pl.get("status", ""),
+                }
 
                 for stage_idx, stage in enumerate(pl.get("stages", [])):
                     if stage_idx >= len(pl_node.children):
@@ -394,8 +454,12 @@ class ClowderClientApp(App):
                     stage_statuses = [j["status"] for j in stage.get("jobs", [])]
                     stage_icon = _status_icon(_aggregate_status(stage_statuses))
                     stage_node.set_label(f"{stage_icon} {stage['name']}")
-                    stage_node.data = {"type": "stage", "pipeline_id": pl["id"],
-                                       "name": stage["name"], "jobs": stage.get("jobs", [])}
+                    stage_node.data = {
+                        "type": "stage",
+                        "pipeline_id": pl["id"],
+                        "name": stage["name"],
+                        "jobs": stage.get("jobs", []),
+                    }
 
                     for job_idx, job in enumerate(stage.get("jobs", [])):
                         if job_idx >= len(stage_node.children):
@@ -405,13 +469,20 @@ class ClowderClientApp(App):
                         retries = job.get("retries", 0)
                         retry_label = f" (retry #{retries})" if retries > 0 else ""
                         job_node.set_label(f"{job_icon} {job['name']}{retry_label}")
-                        job_node.data = {"type": "job", "name": job["name"],
-                                         "status": job["status"],
-                                         "log": job.get("log"),
-                                         "retries": retries}
+                        job_node.data = {
+                            "type": "job",
+                            "name": job["name"],
+                            "status": job["status"],
+                            "log": job.get("log"),
+                            "retries": retries,
+                        }
 
         # If tree has focus, refresh the detail panel for the highlighted node
-        if tree.has_focus and tree.cursor_node and isinstance(tree.cursor_node.data, dict):
+        if (
+            tree.has_focus
+            and tree.cursor_node
+            and isinstance(tree.cursor_node.data, dict)
+        ):
             self.call_later(self._render_detail, tree.cursor_node.data)
 
     # ------------------------------------------------------------------
@@ -461,7 +532,9 @@ class ClowderClientApp(App):
         if panel is None:
             return
         await asyncio.sleep(0.05)  # Let panel clear settle
-        panel.mount(Static("Welcome to Clowder.\n\nSelect an item in the navigation tree."))
+        panel.mount(
+            Static("Welcome to Clowder.\n\nSelect an item in the navigation tree.")
+        )
 
     async def _show_template(self, name: str) -> None:
         panel = self._clear_detail()
@@ -476,11 +549,11 @@ class ClowderClientApp(App):
             # Build template description
             lines = [
                 f"[bold]{template['name']}[/bold]",
-                f"",
+                "",
                 f"{template['description']}",
-                f"",
-                f"[bold]Pipeline Structure:[/bold]",
-                f""
+                "",
+                "[bold]Pipeline Structure:[/bold]",
+                "",
             ]
 
             # Show stages and jobs
@@ -492,11 +565,17 @@ class ClowderClientApp(App):
                 jobs = stage.get("jobs", [])
                 for job_idx, job in enumerate(jobs):
                     is_last_job = job_idx == len(jobs) - 1
-                    job_prefix = "   └─" if is_last_stage else "│  └─" if is_last_job else "│  ├─"
+                    job_prefix = (
+                        "   └─"
+                        if is_last_stage
+                        else "│  └─"
+                        if is_last_job
+                        else "│  ├─"
+                    )
                     if is_last_stage:
                         job_prefix = "   └─" if is_last_job else "   ├─"
 
-                    agent = job['agent_type']
+                    agent = job["agent_type"]
                     lines.append(f"{job_prefix} [green]{agent}[/green]")
 
                     # Show dependencies
@@ -506,7 +585,9 @@ class ClowderClientApp(App):
                             dep_prefix = "   " if is_last_stage else "│  "
                             dep_prefix += "      " if is_last_job else "   │  "
                             arrow = "→" if dep_type == "success" else "⤷"
-                            lines.append(f"{dep_prefix}{arrow} depends on [yellow]{dep['depends_on']}[/yellow]")
+                            lines.append(
+                                f"{dep_prefix}{arrow} depends on [yellow]{dep['depends_on']}[/yellow]"
+                            )
 
             lines.append("")
             panel.mount(Static("\n".join(lines), markup=True))
@@ -515,15 +596,27 @@ class ClowderClientApp(App):
             panel.mount(Static(f"Template: {name}\n\n(Template details not available)"))
 
         panel.mount(Label("Prompt:"))
-        panel.mount(Input(placeholder="Describe what you want the agent to do...", id="pipeline_prompt"))
+        panel.mount(
+            Input(
+                placeholder="Describe what you want the agent to do...",
+                id="pipeline_prompt",
+            )
+        )
         panel.mount(Label("Workspace:"))
         workspace_dirs = _list_workspace_dirs()
         default_workspace = str(Path(WORKSPACE_BASE).resolve())
-        panel.mount(Horizontal(
-            Input(value=default_workspace, id="workspace_path"),
-            Select(workspace_dirs, prompt="Browse subfolders...", allow_blank=True, id="workspace_dir_select"),
-            id="workspace_row",
-        ))
+        panel.mount(
+            Horizontal(
+                Input(value=default_workspace, id="workspace_path"),
+                Select(
+                    workspace_dirs,
+                    prompt="Browse subfolders...",
+                    allow_blank=True,
+                    id="workspace_dir_select",
+                ),
+                id="workspace_row",
+            )
+        )
         panel.mount(Button("Start Pipeline", id="start_pipeline"))
         self._selected_template = name
 
@@ -533,9 +626,13 @@ class ClowderClientApp(App):
             return
         await asyncio.sleep(0.05)  # Let panel clear settle
         icon = _status_icon(data.get("status", ""))
-        panel.mount(Static(f"{icon} {data['name']}\n\n"
-                           f"Status: {data.get('status', 'unknown')}\n"
-                           f"Description: {data.get('description', '')}"))
+        panel.mount(
+            Static(
+                f"{icon} {data['name']}\n\n"
+                f"Status: {data.get('status', 'unknown')}\n"
+                f"Description: {data.get('description', '')}"
+            )
+        )
         panel.mount(Button("Stop Pipeline", id="stop_pipeline"))
         self._selected_pipeline_id = data["id"]
 
@@ -560,9 +657,13 @@ class ClowderClientApp(App):
         retries = data.get("retries", 0)
         retry_info = f"\nRetries: {retries}" if retries > 0 else ""
         log_text = data.get("log") or "(no output yet)"
-        panel.mount(Static(f"Job: {data['name']}\n"
-                           f"Status: {data['status']}"
-                           f"{retry_info}\n\n{log_text}"))
+        panel.mount(
+            Static(
+                f"Job: {data['name']}\n"
+                f"Status: {data['status']}"
+                f"{retry_info}\n\n{log_text}"
+            )
+        )
 
     # ------------------------------------------------------------------
     # Button actions
@@ -570,7 +671,10 @@ class ClowderClientApp(App):
 
     def on_select_changed(self, event: Select.Changed) -> None:
         """When a workspace subfolder is chosen, copy its path into the text input."""
-        if event.select.id == "workspace_dir_select" and event.value is not Select.BLANK:
+        if (
+            event.select.id == "workspace_dir_select"
+            and event.value is not Select.BLANK
+        ):
             try:
                 self.query_one("#workspace_path", Input).value = str(event.value)
             except Exception:
@@ -598,7 +702,9 @@ class ClowderClientApp(App):
 
         try:
             workspace_input = self.query_one("#workspace_path", Input)
-            workspace = workspace_input.value.strip() or str(Path(WORKSPACE_BASE).resolve())
+            workspace = workspace_input.value.strip() or str(
+                Path(WORKSPACE_BASE).resolve()
+            )
         except Exception:
             workspace = str(Path(WORKSPACE_BASE).resolve())
 
@@ -621,7 +727,9 @@ class ClowderClientApp(App):
         # Refresh data and restore focus to tree
         self._last_snapshot = None  # force rebuild
         self._last_structure = None
-        templates, running_pipelines, recent_pipelines = await asyncio.to_thread(self._fetch_data)
+        templates, running_pipelines, recent_pipelines = await asyncio.to_thread(
+            self._fetch_data
+        )
         self._apply_refresh(templates, running_pipelines, recent_pipelines)
 
         # Restore focus to tree
@@ -634,16 +742,14 @@ class ClowderClientApp(App):
             return
 
         # Show progress notification
-        self.notify(f"Stopping pipeline...")
+        self.notify("Stopping pipeline...")
 
         try:
-            pipeline = await asyncio.to_thread(
-                self.api_client.stop_pipeline, pid
-            )
+            pipeline = await asyncio.to_thread(self.api_client.stop_pipeline, pid)
             self.notify(f"Stopped pipeline '{pipeline['name']}'")
         except requests.exceptions.HTTPError as e:
             if e.response and e.response.status_code == 404:
-                self.notify(f"Pipeline not found.", severity="error")
+                self.notify("Pipeline not found.", severity="error")
             else:
                 self.notify(f"Error: {e}", severity="error")
         except requests.exceptions.RequestException as e:
@@ -652,7 +758,9 @@ class ClowderClientApp(App):
         # Refresh data and restore focus to tree
         self._last_snapshot = None  # force rebuild
         self._last_structure = None
-        templates, running_pipelines, recent_pipelines = await asyncio.to_thread(self._fetch_data)
+        templates, running_pipelines, recent_pipelines = await asyncio.to_thread(
+            self._fetch_data
+        )
         self._apply_refresh(templates, running_pipelines, recent_pipelines)
 
         # Restore focus to tree

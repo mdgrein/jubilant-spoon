@@ -14,23 +14,26 @@ the harness's stdout pipe as it is produced, not buffered until the end).
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-AGENTS_DIR = Path(__file__).parent.parent / "agents"
-sys.path.insert(0, str(AGENTS_DIR))
+HARNESSES_DIR = Path(__file__).parent.parent / "harnesses"
+PIPELINE_DIR = Path(__file__).parent.parent / "pipeline"
+sys.path.insert(0, str(HARNESSES_DIR))
+sys.path.insert(0, str(PIPELINE_DIR))
 
-from db import ClowderDB
-import harness_common as hc
+from db import ClowderDB  # noqa: E402
+import harness_common as hc  # noqa: E402
 
-SCHEMA_SQL = AGENTS_DIR / "schema_pipelines.sql"
-MOCK_MODEL = AGENTS_DIR / "mock_model.py"
+MOCK_MODEL = HARNESSES_DIR / "mock_model.py"
+_PIPELINE_SCHEMA = (PIPELINE_DIR / "schema_pipelines.sql").read_text()
 
 # Minimal valid Python that passes ruff without needing real implementation
 _GOOD_CODE = "def answer():\n    return 42\n"
@@ -46,10 +49,7 @@ _PASSING_TESTS = (
     "    assert answer() == 42\n"
 )
 
-_FAILING_TESTS = (
-    "def test_always_fails():\n"
-    "    assert False\n"
-)
+_FAILING_TESTS = "def test_always_fails():\n    assert False\n"
 
 
 # ---------------------------------------------------------------------------
@@ -70,16 +70,21 @@ def harness_env(tmp_path, monkeypatch):
     monkeypatch.setenv("CLOWDER_OLLAMA_CMD", f"{sys.executable} {MOCK_MODEL}")
     monkeypatch.setenv("MOCK_MODEL_DELAY", "0")  # fast by default in unit tests
 
-    db_path = tmp_path / "clowder.db"
-    db = ClowderDB(str(db_path))
-    db.conn.executescript(SCHEMA_SQL.read_text())
+    db_uri = f"file:testdb{uuid.uuid4().hex}?mode=memory&cache=shared"
+    monkeypatch.setenv("CLOWDER_DB_PATH", db_uri)
+    db = ClowderDB(db_uri)
+    db.conn.executescript(_PIPELINE_SCHEMA)
     db.conn.commit()
+    # Keep a second connection open so the in-memory DB survives db.close() calls
+    # made within the test before calling the harness.
+    _keeper = sqlite3.connect(db_uri, uri=True)
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "tests").mkdir()
 
     yield {"db": db, "workspace": workspace, "tmp_path": tmp_path}
+    _keeper.close()
     db.close()
 
 
@@ -142,7 +147,8 @@ def _insert_job(
 
 def _reopen_db(tmp_path) -> ClowderDB:
     """Reopen the test DB after a harness main() has closed it."""
-    return ClowderDB(str(tmp_path / "clowder.db"))
+    uri = os.environ.get("CLOWDER_DB_PATH")
+    return ClowderDB(uri) if uri else ClowderDB(str(tmp_path / "clowder.db"))
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +162,7 @@ class TestDevHarness:
     def _run_main(self, job_id, monkeypatch):
         """Call dev_harness.main() in-process."""
         import dev_harness
+
         monkeypatch.setattr(sys, "argv", ["dev_harness.py", job_id])
         dev_harness.main()
 
@@ -241,7 +248,7 @@ class TestDevHarness:
         workspace = harness_env["workspace"]
         job_id = str(uuid.uuid4())
 
-        bad_code = "def broken(\n"   # syntax error — ruff will reject this
+        bad_code = "def broken(\n"  # syntax error — ruff will reject this
         good_code = _GOOD_CODE
 
         responses = [bad_code, good_code]
@@ -262,6 +269,7 @@ class TestDevHarness:
 
         with patch("dev_harness.call_model", side_effect=_fake_ollama):
             import dev_harness
+
             monkeypatch.setattr(sys, "argv", ["dev_harness.py", job_id])
             dev_harness.main()
 
@@ -292,6 +300,7 @@ class TestDevHarness:
 
         with patch("dev_harness.call_model", side_effect=_always_bad_ollama):
             import dev_harness
+
             monkeypatch.setattr(sys, "argv", ["dev_harness.py", job_id])
             with pytest.raises(SystemExit) as exc:
                 dev_harness.main()
@@ -329,18 +338,33 @@ class TestDevHarness:
         )
         db.close()
 
+        # Subprocess runs in a separate process and can't share the in-memory DB.
+        # Write the job to a disk file and point the subprocess at it.
+        disk_db_path = tmp_path / "clowder.db"
+        disk_db = ClowderDB(str(disk_db_path))
+        disk_db.conn.executescript(_PIPELINE_SCHEMA)
+        disk_db.conn.commit()
+        _insert_job(
+            disk_db,
+            job_id=job_id,
+            workspace_path=workspace,
+            prompt="FILENAME: solution.py\n\nWrite something.",
+        )
+        disk_db.close()
+
         env = {
             **os.environ,
+            "CLOWDER_DB_PATH": str(disk_db_path),
             "CLOWDER_OLLAMA_CMD": f"{sys.executable} {MOCK_MODEL}",
             "MOCK_MODEL_STDERR": "|".join(markers),
             "MOCK_MODEL_STDOUT": _GOOD_CODE,
-            "MOCK_MODEL_DELAY": "0.05",   # 50 ms per line
+            "MOCK_MODEL_DELAY": "0.05",  # 50 ms per line
             "PYTHONIOENCODING": "utf-8",
-            "PYTHONPATH": str(AGENTS_DIR),
+            "PYTHONPATH": str(HARNESSES_DIR) + os.pathsep + str(PIPELINE_DIR),
         }
 
         proc = subprocess.Popen(
-            [sys.executable, "-u", str(AGENTS_DIR / "dev_harness.py"), job_id],
+            [sys.executable, "-u", str(HARNESSES_DIR / "dev_harness.py"), job_id],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -357,13 +381,17 @@ class TestDevHarness:
         assert proc.returncode == 0, "Harness subprocess must exit 0 on success"
 
         # Every marker must appear somewhere in the harness output
-        all_output = " ".join(l for _, l in lines_with_time)
+        all_output = " ".join(line for _, line in lines_with_time)
         for marker in markers:
-            assert marker in all_output, f"Marker '{marker}' not found in harness output"
+            assert marker in all_output, (
+                f"Marker '{marker}' not found in harness output"
+            )
 
         # The lines must have arrived at genuinely different timestamps
         # (if the harness were buffering, they'd all arrive at once at the end).
-        marker_times = [t for t, l in lines_with_time if any(m in l for m in markers)]
+        marker_times = [
+            t for t, line in lines_with_time if any(m in line for m in markers)
+        ]
         assert len(marker_times) >= 2
         assert max(marker_times) - min(marker_times) >= 0.03, (
             "Marker lines should be spread over time, not all arrive simultaneously"
@@ -376,7 +404,9 @@ class TestDevHarness:
         job_id = str(uuid.uuid4())
 
         # Write a test that always fails
-        (workspace / "tests" / "test_solution.py").write_text(_FAILING_TESTS, encoding="utf-8")
+        (workspace / "tests" / "test_solution.py").write_text(
+            _FAILING_TESTS, encoding="utf-8"
+        )
 
         _insert_job(
             db,
@@ -386,8 +416,24 @@ class TestDevHarness:
         )
         db.close()
 
-        with patch("dev_harness.call_model", return_value=_GOOD_CODE):
+        _pytest_failure = (
+            1,
+            "=== FAILURES ===\n"
+            "____________________ test_always_fails ____________________\n"
+            "    def test_always_fails():\n"
+            ">       assert False\n"
+            "E       assert False\n"
+            "test_solution.py:2: AssertionError\n"
+            "=== short test summary info ===\n"
+            "FAILED test_solution.py::test_always_fails - assert False",
+        )
+
+        with (
+            patch("dev_harness.call_model", return_value=_GOOD_CODE),
+            patch("dev_harness.run_pytest", return_value=_pytest_failure),
+        ):
             import dev_harness
+
             monkeypatch.setattr(sys, "argv", ["dev_harness.py", job_id])
             with pytest.raises(SystemExit) as exc:
                 dev_harness.main()
@@ -408,7 +454,9 @@ class TestDevHarness:
         job_id = str(uuid.uuid4())
 
         # Write a passing test suite
-        (workspace / "tests" / "test_solution.py").write_text(_PASSING_TESTS, encoding="utf-8")
+        (workspace / "tests" / "test_solution.py").write_text(
+            _PASSING_TESTS, encoding="utf-8"
+        )
 
         _insert_job(
             db,
@@ -426,6 +474,7 @@ class TestDevHarness:
 
         with patch("dev_harness.call_model", side_effect=_counting_ollama):
             import dev_harness
+
             monkeypatch.setattr(sys, "argv", ["dev_harness.py", job_id])
             dev_harness.main()
 
@@ -445,7 +494,9 @@ class TestDevHarness:
         workspace = harness_env["workspace"]
         job_id = str(uuid.uuid4())
 
-        (workspace / "tests" / "test_solution.py").write_text(_FAILING_TESTS, encoding="utf-8")
+        (workspace / "tests" / "test_solution.py").write_text(
+            _FAILING_TESTS, encoding="utf-8"
+        )
 
         _insert_job(
             db,
@@ -461,14 +512,32 @@ class TestDevHarness:
             prompts_seen.append(prompt)
             return _GOOD_CODE
 
-        with patch("dev_harness.call_model", side_effect=_recording_ollama):
+        _pytest_failure = (
+            1,
+            "=== FAILURES ===\n"
+            "____________________ test_always_fails ____________________\n"
+            "    def test_always_fails():\n"
+            ">       assert False\n"
+            "E       assert False\n"
+            "test_solution.py:2: AssertionError\n"
+            "=== short test summary info ===\n"
+            "FAILED test_solution.py::test_always_fails - assert False",
+        )
+
+        with (
+            patch("dev_harness.call_model", side_effect=_recording_ollama),
+            patch("dev_harness.run_pytest", return_value=_pytest_failure),
+        ):
             import dev_harness
+
             monkeypatch.setattr(sys, "argv", ["dev_harness.py", job_id])
             with pytest.raises(SystemExit):
                 dev_harness.main()
 
         assert len(prompts_seen) >= 2, "Should have made at least two LLM calls"
-        assert "FAILING TESTS OUTPUT" in prompts_seen[1]
+        # Harness immediately enters single-test mode after the first failure,
+        # so the second prompt uses the single-test template, not the bulk-failure template.
+        assert "FAILING TEST CODE" in prompts_seen[1]
 
     def test_completes_without_test_file(self, harness_env, monkeypatch):
         """When no test file exists, the harness completes after ruff passes."""
@@ -487,6 +556,7 @@ class TestDevHarness:
 
         with patch("dev_harness.call_model", return_value=_GOOD_CODE):
             import dev_harness
+
             monkeypatch.setattr(sys, "argv", ["dev_harness.py", job_id])
             dev_harness.main()
 
@@ -497,6 +567,41 @@ class TestDevHarness:
         db2.close()
         assert row["status"] == "completed"
         assert "no test file" in row["job_output"]
+
+    def test_vendor_and_model_from_job_passed_to_call_model(
+        self, tmp_path, monkeypatch
+    ):
+        """vendor and model stored on the job row must be forwarded to call_model."""
+        monkeypatch.chdir(tmp_path)
+        fake_db = MagicMock()
+        fake_job = {
+            "job_id": "j1",
+            "pipeline_id": "p1",
+            "prompt": "FILENAME: solution.py\n\nWrite foo.",
+            "original_prompt": "FILENAME: solution.py\n\nWrite foo.",
+            "allowed_paths": json.dumps([str(tmp_path)]),
+            "max_iterations": 3,
+            "artifact_strategy": None,
+            "retry_strategy": None,
+            "iteration": 0,
+            "vendor": "alibaba",
+            "model": "qwen-sentinel",
+        }
+        with (
+            patch("dev_harness.load_job", return_value=(fake_db, fake_job)),
+            patch(
+                "dev_harness.call_model", return_value="def foo(): pass"
+            ) as mock_call,
+            patch("dev_harness.run_ruff", return_value=(True, "SKIPPED")),
+            patch("dev_harness.complete_job"),
+        ):
+            import dev_harness
+
+            monkeypatch.setattr(sys, "argv", ["dev_harness.py", "j1"])
+            dev_harness.main()
+
+        assert mock_call.call_args.kwargs["vendor"] == "alibaba"
+        assert mock_call.call_args.kwargs["model"] == "qwen-sentinel"
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +614,7 @@ class TestTestHarness:
 
     def _run_main(self, job_id, monkeypatch):
         import test_harness
+
         monkeypatch.setattr(sys, "argv", ["test_harness.py", job_id])
         test_harness.main()
 
@@ -531,7 +637,9 @@ class TestTestHarness:
         self._run_main(job_id, monkeypatch)
 
         test_file = workspace / "tests" / "test_solution.py"
-        assert test_file.exists(), "Test file must be created at workspace/tests/test_<filename>"
+        assert test_file.exists(), (
+            "Test file must be created at workspace/tests/test_<filename>"
+        )
 
     def test_completes_job_in_db(self, harness_env, monkeypatch):
         """Job must be marked completed after valid tests are written and collected."""
@@ -599,6 +707,7 @@ class TestTestHarness:
 
         with patch("test_harness.call_model", side_effect=_fake_ollama):
             import test_harness
+
             monkeypatch.setattr(sys, "argv", ["test_harness.py", job_id])
             test_harness.main()
 
@@ -660,6 +769,7 @@ class TestTestHarness:
 
         with patch("test_harness.run_pytest", return_value=(2, "collection error")):
             import test_harness
+
             monkeypatch.setattr(sys, "argv", ["test_harness.py", job_id])
             with pytest.raises(SystemExit) as exc:
                 test_harness.main()
@@ -688,6 +798,7 @@ class TestTestHarness:
             detect_calls[0] += 1
             if detect_calls[0] == 1:
                 from dev_utils import Contradiction
+
                 return [
                     Contradiction(
                         test_a="test_zero_ok",
@@ -708,12 +819,17 @@ class TestTestHarness:
         db.close()
 
         with patch("test_harness.call_model", return_value=_FAILING_TESTS):
-            with patch("test_harness.detect_test_contradictions", side_effect=_fake_detect):
+            with patch(
+                "test_harness.detect_test_contradictions", side_effect=_fake_detect
+            ):
                 import test_harness
+
                 monkeypatch.setattr(sys, "argv", ["test_harness.py", job_id])
                 test_harness.main()
 
-        assert detect_calls[0] >= 2, "detect_test_contradictions must be called at least twice"
+        assert detect_calls[0] >= 2, (
+            "detect_test_contradictions must be called at least twice"
+        )
 
         db2 = _reopen_db(harness_env["tmp_path"])
         job_row = db2.conn.execute(
@@ -728,12 +844,17 @@ class TestTestHarness:
         assert job_row["status"] == "completed"
 
         import json
-        statuses = [json.loads(r["results"]).get("status") for r in action_rows if r["results"]]
+
+        statuses = [
+            json.loads(r["results"]).get("status") for r in action_rows if r["results"]
+        ]
         assert "contradiction" in statuses, (
             "At least one action must be logged with status='contradiction'"
         )
 
-    def test_contradiction_feedback_included_in_retry_prompt(self, harness_env, monkeypatch):
+    def test_contradiction_feedback_included_in_retry_prompt(
+        self, harness_env, monkeypatch
+    ):
         """
         When a contradiction is detected, the retry prompt shown to the LLM must
         include the CONTRADICTION(S) DETECTED message describing the conflicting calls.
@@ -748,6 +869,7 @@ class TestTestHarness:
             detect_calls[0] += 1
             if detect_calls[0] == 1:
                 from dev_utils import Contradiction
+
                 return [
                     Contradiction(
                         test_a="test_ok",
@@ -774,8 +896,11 @@ class TestTestHarness:
         db.close()
 
         with patch("test_harness.call_model", side_effect=_recording_ollama):
-            with patch("test_harness.detect_test_contradictions", side_effect=_fake_detect):
+            with patch(
+                "test_harness.detect_test_contradictions", side_effect=_fake_detect
+            ):
                 import test_harness
+
                 monkeypatch.setattr(sys, "argv", ["test_harness.py", job_id])
                 test_harness.main()
 
@@ -786,6 +911,45 @@ class TestTestHarness:
         assert "foo(0)" in prompts_seen[1], (
             "Retry prompt must name the contradicted call"
         )
+
+    def test_vendor_and_model_from_job_passed_to_call_model(
+        self, tmp_path, monkeypatch
+    ):
+        """vendor and model stored on the job row must be forwarded to call_model."""
+        monkeypatch.chdir(tmp_path)
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "tests").mkdir()
+        (workspace / "tests" / "test_solution.py").write_text(
+            _PASSING_TESTS, encoding="utf-8"
+        )
+        fake_db = MagicMock()
+        fake_job = {
+            "job_id": "j1",
+            "pipeline_id": "p1",
+            "prompt": "FILENAME: solution.py\n\nWrite foo.",
+            "original_prompt": "FILENAME: solution.py\n\nWrite foo.",
+            "allowed_paths": json.dumps([str(workspace)]),
+            "max_iterations": 3,
+            "artifact_strategy": None,
+            "retry_strategy": None,
+            "vendor": "alibaba",
+            "model": "qwen-sentinel",
+        }
+        with (
+            patch("test_harness.load_job", return_value=(fake_db, fake_job)),
+            patch("test_harness.call_model", return_value=_PASSING_TESTS) as mock_call,
+            patch("test_harness.run_ruff", return_value=(True, "SKIPPED")),
+            patch("test_harness.run_pytest", return_value=(1, "1 failed")),
+            patch("test_harness.complete_job"),
+        ):
+            import test_harness
+
+            monkeypatch.setattr(sys, "argv", ["test_harness.py", "j1"])
+            test_harness.main()
+
+        assert mock_call.call_args.kwargs["vendor"] == "alibaba"
+        assert mock_call.call_args.kwargs["model"] == "qwen-sentinel"
 
 
 # ---------------------------------------------------------------------------
@@ -804,10 +968,13 @@ class TestVerifyHarness:
 
     def _run_main(self, job_id, monkeypatch):
         import verify_harness
+
         monkeypatch.setattr(sys, "argv", ["verify_harness.py", job_id])
         verify_harness.main()
 
-    def _seed(self, harness_env, *, filename="solution.py", test_content, impl_content=None):
+    def _seed(
+        self, harness_env, *, filename="solution.py", test_content, impl_content=None
+    ):
         """Write test and optional impl files into the workspace."""
         workspace = harness_env["workspace"]
         test_file = workspace / "tests" / f"test_{filename}"
@@ -868,7 +1035,9 @@ class TestVerifyHarness:
         row = db2.conn.execute(
             "SELECT status FROM jobs WHERE job_id = ?", (job_id,)
         ).fetchone()
-        assert row["status"] == "waiting", "Verifier should be waiting while child dev runs"
+        assert row["status"] == "waiting", (
+            "Verifier should be waiting while child dev runs"
+        )
 
         # Exactly one child dev job must be spawned
         new_jobs = db2.conn.execute(
@@ -1000,6 +1169,7 @@ class TestVerifyHarness:
         with patch("verify_harness.run_pytest", return_value=(2, "collection error")):
             with patch("verify_harness.call_model", side_effect=_counting_ollama):
                 import verify_harness
+
                 monkeypatch.setattr(sys, "argv", ["verify_harness.py", job_id])
                 verify_harness.main()
 
@@ -1014,7 +1184,9 @@ class TestVerifyHarness:
             (job_id,),
         ).fetchall()
         db2.close()
-        assert row["status"] == "waiting", "verifier should be waiting while child dev runs"
+        assert row["status"] == "waiting", (
+            "verifier should be waiting while child dev runs"
+        )
         assert len(new_jobs) == 1, "exactly one child dev job should be spawned"
         assert new_jobs[0]["agent_type"] == "dev"
         assert new_jobs[0]["parent_job_id"] == job_id
@@ -1040,7 +1212,9 @@ class TestVerifyHarness:
         db.close()
 
         # LLM says PASS, but pytest will return rc=1 (tests fail)
-        with patch("verify_harness.call_model", return_value="PASS\nImplementation is correct."):
+        with patch(
+            "verify_harness.call_model", return_value="PASS\nImplementation is correct."
+        ):
             self._run_main(job_id, monkeypatch)
 
         db2 = _reopen_db(harness_env["tmp_path"])
@@ -1148,6 +1322,7 @@ class TestVerifyHarness:
         with patch("verify_harness.run_pytest", return_value=(2, "collection error")):
             with patch("verify_harness.call_model", side_effect=_counting_ollama):
                 import verify_harness
+
                 monkeypatch.setattr(sys, "argv", ["verify_harness.py", job_id])
                 verify_harness.main()
 
@@ -1163,7 +1338,146 @@ class TestVerifyHarness:
         ).fetchall()
         db2.close()
 
-        assert verifier_job_status["status"] == "waiting", "verifier should be waiting while child dev runs"
+        assert verifier_job_status["status"] == "waiting", (
+            "verifier should be waiting while child dev runs"
+        )
         assert len(new_jobs) == 1, "exactly one child dev job should be spawned"
         assert new_jobs[0]["agent_type"] == "dev"
         assert new_jobs[0]["parent_job_id"] == job_id
+
+    def test_vendor_and_model_from_job_passed_to_call_model(
+        self, tmp_path, monkeypatch
+    ):
+        """vendor and model stored on the job row must be forwarded to call_model."""
+        monkeypatch.chdir(tmp_path)
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "tests").mkdir()
+        (workspace / "tests" / "test_solution.py").write_text(
+            _PASSING_TESTS, encoding="utf-8"
+        )
+        (workspace / "solution.py").write_text(_GOOD_CODE, encoding="utf-8")
+        fake_db = MagicMock()
+        fake_job = {
+            "job_id": "j1",
+            "pipeline_id": "p1",
+            "prompt": "FILENAME: solution.py\n\nWrite foo.",
+            "original_prompt": "FILENAME: solution.py\n\nWrite foo.",
+            "allowed_paths": json.dumps([str(workspace)]),
+            "max_iterations": 3,
+            "artifact_strategy": None,
+            "retry_strategy": None,
+            "stage_id": "stage-1",
+            "parent_job_id": None,
+            "vendor": "alibaba",
+            "model": "qwen-sentinel",
+        }
+        with (
+            patch("verify_harness.load_job", return_value=(fake_db, fake_job)),
+            patch(
+                "verify_harness.call_model", return_value="PASS\nLooks good."
+            ) as mock_call,
+            patch("verify_harness.run_pytest", return_value=(0, "1 passed")),
+            patch("verify_harness.complete_job"),
+        ):
+            import verify_harness
+
+            monkeypatch.setattr(sys, "argv", ["verify_harness.py", "j1"])
+            verify_harness.main()
+
+        assert mock_call.call_args.kwargs["vendor"] == "alibaba"
+
+
+# ---------------------------------------------------------------------------
+# AgentHarness — raw_stdout printed to stdout
+# ---------------------------------------------------------------------------
+
+
+class TestAgentHarnessRawStdout:
+    """Unit tests for harnesses/harness.py AgentHarness raw_stdout printing."""
+
+    def _make_harness(self, tmp_path):
+        """Return a partially-constructed AgentHarness with mocked internals."""
+        import importlib
+
+        harness_mod = importlib.import_module("harness")
+        h = harness_mod.AgentHarness.__new__(harness_mod.AgentHarness)
+        mock_db = MagicMock()
+        mock_db._timestamp.return_value = "2026-01-01T00:00:00"
+        mock_db.get_action_history.return_value = []
+        h.db = mock_db
+        h.model = "qwen3:8b"
+        return h, harness_mod
+
+    def _make_job(self, tmp_path):
+        import json as _json
+
+        return {
+            "job_id": "j1",
+            "prompt": "do work",
+            "allowed_paths": _json.dumps([str(tmp_path)]),
+            "max_iterations": 1,
+            "timeout_seconds": 60,
+            "iteration": 0,
+            "started_at": None,
+            "status": "pending",
+        }
+
+    def test_raw_stdout_printed_per_iteration(self, tmp_path, capsys):
+        """When run_iteration returns non-empty raw_stdout, it is printed."""
+        h, harness_mod = self._make_harness(tmp_path)
+        job = self._make_job(tmp_path)
+
+        mock_agent = MagicMock()
+        mock_agent.action_history = []
+        mock_agent.iteration = 0
+        mock_agent.started_at = None
+        mock_agent.run_iteration.return_value = {
+            "iteration": 1,
+            "raw_stdout": "Hello from the LLM",
+            "raw_stderr": "",
+            "llm_response": {},
+            "results": [],
+            "should_terminate": True,
+            "termination_reason": "done",
+        }
+
+        h._load_job = lambda jid: job
+        h._check_external_stop = lambda j: None
+        h._load_action_history = lambda jid: []
+
+        with patch.object(harness_mod, "Agent", return_value=mock_agent):
+            h.run("j1")
+
+        captured = capsys.readouterr()
+        assert "[iter 1] LLM response:" in captured.out
+        assert "Hello from the LLM" in captured.out
+
+    def test_no_output_when_raw_stdout_empty(self, tmp_path, capsys):
+        """When raw_stdout is empty, no LLM response line is printed."""
+        h, harness_mod = self._make_harness(tmp_path)
+        job = self._make_job(tmp_path)
+
+        mock_agent = MagicMock()
+        mock_agent.action_history = []
+        mock_agent.iteration = 0
+        mock_agent.started_at = None
+        mock_agent.run_iteration.return_value = {
+            "iteration": 1,
+            "raw_stdout": "",
+            "raw_stderr": "",
+            "llm_response": {},
+            "results": [],
+            "should_terminate": True,
+            "termination_reason": "done",
+        }
+
+        h._load_job = lambda jid: job
+        h._check_external_stop = lambda j: None
+        h._load_action_history = lambda jid: []
+
+        with patch.object(harness_mod, "Agent", return_value=mock_agent):
+            h.run("j1")
+
+        captured = capsys.readouterr()
+        assert "LLM response:" not in captured.out

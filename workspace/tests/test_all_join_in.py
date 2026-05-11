@@ -5,7 +5,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import all_join_in
 
 
-
 def test_run_all_fibonacci_sequence(capsys):
     all_join_in.run_all()
     captured = capsys.readouterr().out

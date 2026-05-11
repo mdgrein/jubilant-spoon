@@ -11,7 +11,7 @@ $ARGUMENTS
 Execute the agent with this command:
 
 ```bash
-python agents/run_agent.py "$ARGUMENTS" --workspace .
+python harnesses/run_agent.py "$ARGUMENTS" --workspace .
 ```
 
 The agent will:

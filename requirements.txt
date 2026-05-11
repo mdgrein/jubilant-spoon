@@ -7,3 +7,4 @@ rich
 pytest
 pytest-asyncio
 httpx
+croniter

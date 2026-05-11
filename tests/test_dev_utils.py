@@ -1,15 +1,59 @@
 """
 Unit tests for dev_utils.py — contradiction detection and I/O example extraction.
+Also tests clean_job_output from pipeline/output_utils.py.
 """
 
 import sys
 from pathlib import Path
 
-import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "agents"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "harnesses"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "pipeline"))
 
 from dev_utils import Contradiction, detect_test_contradictions, extract_all_io_examples
+from output_utils import clean_job_output
+
+
+class TestCleanJobOutput:
+    def test_strips_csi_sequence(self):
+        assert clean_job_output("\x1b[1mhello\x1b[0m") == "hello"
+
+    def test_strips_cursor_hide_show(self):
+        assert clean_job_output("\x1b[?25ltext\x1b[?25h") == "text"
+
+    def test_strips_bracketed_paste_mode(self):
+        assert clean_job_output("\x1b[?2026htext") == "text"
+
+    def test_strips_cursor_column_move(self):
+        assert clean_job_output("\x1b[1Gtext") == "text"
+
+    def test_strips_erase_to_eol(self):
+        assert clean_job_output("text\x1b[K") == "text"
+
+    def test_preserves_normal_unicode(self):
+        result = clean_job_output("→ progress ⠋ done")
+        assert result == "→ progress ⠋ done"
+
+    def test_empty_string_in_empty_string_out(self):
+        assert clean_job_output("") == ""
+
+    def test_already_clean_passes_through(self):
+        text = "fibonacci(10) = 55\nall tests passed"
+        assert clean_job_output(text) == text
+
+    def test_strips_spinner_frame(self):
+        # Typical Ollama spinner: cursor-hide, col-1, spinner-char, erase-EOL, cursor-show
+        frame = "\x1b[?25l\x1b[1G\xe2\xa0\x8b \x1b[K\x1b[?25h"
+        result = clean_job_output(frame)
+        assert "\x1b" not in result
+        assert "[?25h" not in result
+        assert "[?25l" not in result
+
+    def test_real_output_preserved_after_stripping(self):
+        mixed = "\x1b[?25l\x1b[1G⠋ \x1b[K\x1b[?25hfibonacci(10) = 55"
+        result = clean_job_output(mixed)
+        assert "fibonacci(10) = 55" in result
+        assert "\x1b" not in result
 
 
 class TestDetectTestContradictions:
@@ -26,10 +70,7 @@ class TestDetectTestContradictions:
         """assert True / assert x forms are ignored — no call on the left."""
         f = tmp_path / "test_noop.py"
         f.write_text(
-            "def test_a():\n"
-            "    assert True\n"
-            "def test_b():\n"
-            "    assert 1 == 1\n",
+            "def test_a():\n    assert True\ndef test_b():\n    assert 1 == 1\n",
             encoding="utf-8",
         )
         assert detect_test_contradictions(f) == []
